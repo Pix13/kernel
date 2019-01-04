@@ -1079,9 +1079,9 @@ killed:
 
 char *get_task_comm(char *buf, struct task_struct *tsk)
 {
-	/* buf must be at least sizeof(tsk->comm) in size */
+	/* buf must be at least TASK_COMM_LEN in size */
 	task_lock(tsk);
-	strncpy(buf, tsk->comm, sizeof(tsk->comm));
+	strlcpy(buf, tsk->comm, TASK_COMM_LEN);
 	task_unlock(tsk);
 	return buf;
 }
