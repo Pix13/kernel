@@ -78,14 +78,6 @@ static const struct drm_prop_enum_list drm_plane_type_enum_list[] = {
 	{ DRM_PLANE_TYPE_CURSOR, "Cursor" },
 };
 
-static struct drm_prop_enum_list drm_cp_enum_list[] = {
-	{ DRM_MODE_CONTENT_PROTECTION_UNDESIRED, "Undesired" },
-	{ DRM_MODE_CONTENT_PROTECTION_DESIRED, "Desired" },
-	{ DRM_MODE_CONTENT_PROTECTION_ENABLED, "Enabled" },
-};
-
-DRM_ENUM_NAME_FN(drm_get_content_protection_name, drm_cp_enum_list)
-
 /*
  * Optional properties
  */
@@ -714,9 +706,6 @@ int drm_crtc_init_with_planes(struct drm_device *dev, struct drm_crtc *crtc,
 
 	crtc->dev = dev;
 	crtc->funcs = funcs;
-
-	INIT_LIST_HEAD(&crtc->commit_list);
-	spin_lock_init(&crtc->commit_lock);
 
 	drm_modeset_lock_init(&crtc->mutex);
 	ret = drm_mode_object_get(dev, &crtc->base, DRM_MODE_OBJECT_CRTC);
@@ -1670,21 +1659,6 @@ static int drm_mode_create_standard_properties(struct drm_device *dev)
 		return -ENOMEM;
 	dev->mode_config.tile_property = prop;
 
-	prop = drm_property_create(dev, DRM_MODE_PROP_BLOB,
-				   "HDR_SOURCE_METADATA", 0);
-
-	if (!prop)
-		return -ENOMEM;
-	dev->mode_config.hdr_source_metadata_property = prop;
-
-	prop = drm_property_create(dev,
-				   DRM_MODE_PROP_BLOB |
-				   DRM_MODE_PROP_IMMUTABLE,
-				   "HDR_PANEL_METADATA", 0);
-	if (!prop)
-		return -ENOMEM;
-	dev->mode_config.hdr_panel_metadata_property = prop;
-
 	prop = drm_property_create_enum(dev, DRM_MODE_PROP_IMMUTABLE,
 					"type", drm_plane_type_enum_list,
 					ARRAY_SIZE(drm_plane_type_enum_list));
@@ -1811,11 +1785,6 @@ static int drm_mode_create_standard_properties(struct drm_device *dev)
 	if (!prop)
 		return -ENOMEM;
 	dev->mode_config.gamma_lut_size_property = prop;
-
-	prop = drm_property_create_enum(dev, 0,
-					"Content Protection", drm_cp_enum_list,
-					ARRAY_SIZE(drm_cp_enum_list));
-	dev->mode_config.content_protection_property = prop;
 
 	return 0;
 }
@@ -1987,42 +1956,6 @@ int drm_mode_create_scaling_mode_property(struct drm_device *dev)
 	return 0;
 }
 EXPORT_SYMBOL(drm_mode_create_scaling_mode_property);
-
-/**
- * drm_connector_attach_content_protection_property - attach content protection
- * property
- *
- * @connector: connector to attach CP property on.
- *
- * This is used to add support for content protection on select connectors.
- * Content Protection is intentionally vague to allow for different underlying
- * technologies, however it is most implemented by HDCP.
- *
- * The content protection will be set to &drm_connector_state.content_protection
- *
- * Returns:
- * Zero on success, negative errno on failure.
- */
-int drm_connector_attach_content_protection_property(
-		struct drm_connector *connector)
-{
-	struct drm_device *dev = connector->dev;
-	struct drm_property *prop;
-
-	prop = drm_property_create_enum(dev, 0, "Content Protection",
-					drm_cp_enum_list,
-					ARRAY_SIZE(drm_cp_enum_list));
-	if (!prop)
-		return -ENOMEM;
-
-	drm_object_attach_property(&connector->base, prop,
-				   DRM_MODE_CONTENT_PROTECTION_UNDESIRED);
-
-	connector->content_protection_property = prop;
-
-	return 0;
-}
-EXPORT_SYMBOL(drm_connector_attach_content_protection_property);
 
 /**
  * drm_mode_create_aspect_ratio_property - create aspect ratio property
@@ -5105,26 +5038,6 @@ int drm_mode_connector_update_edid_property(struct drm_connector *connector,
 }
 EXPORT_SYMBOL(drm_mode_connector_update_edid_property);
 
-int
-drm_mode_connector_update_hdr_property(struct drm_connector *connector,
-				       const struct hdr_static_metadata *data)
-{
-	struct drm_device *dev = connector->dev;
-	size_t size = sizeof(*data);
-	struct drm_property *property =
-			dev->mode_config.hdr_panel_metadata_property;
-	int ret;
-
-	ret = drm_property_replace_global_blob(dev,
-					       &connector->hdr_panel_blob_ptr,
-					       size,
-					       data,
-					       &connector->base,
-					       property);
-	return ret;
-}
-EXPORT_SYMBOL(drm_mode_connector_update_hdr_property);
-
 /* Some properties could refer to dynamic refcnt'd objects, or things that
  * need special locking to handle lifetime issues (ie. to ensure the prop
  * value doesn't become invalid part way through the property update due to
@@ -5241,9 +5154,9 @@ int drm_mode_connector_property_set_ioctl(struct drm_device *dev,
 	return drm_mode_obj_set_property_ioctl(dev, &obj_set_prop, file_priv);
 }
 
-int drm_mode_connector_set_obj_prop(struct drm_mode_object *obj,
-				    struct drm_property *property,
-				    uint64_t value)
+static int drm_mode_connector_set_obj_prop(struct drm_mode_object *obj,
+					   struct drm_property *property,
+					   uint64_t value)
 {
 	int ret = -EINVAL;
 	struct drm_connector *connector = obj_to_connector(obj);
@@ -5261,7 +5174,6 @@ int drm_mode_connector_set_obj_prop(struct drm_mode_object *obj,
 		drm_object_property_set_value(&connector->base, property, value);
 	return ret;
 }
-EXPORT_SYMBOL(drm_mode_connector_set_obj_prop);
 
 static int drm_mode_crtc_set_obj_prop(struct drm_mode_object *obj,
 				      struct drm_property *property,
@@ -5660,6 +5572,7 @@ int drm_mode_page_flip_ioctl(struct drm_device *dev,
 	struct drm_crtc *crtc;
 	struct drm_framebuffer *fb = NULL;
 	struct drm_pending_vblank_event *e = NULL;
+	unsigned long flags;
 	int ret = -EINVAL;
 
 	if (!drm_core_check_feature(dev, DRIVER_MODESET))
@@ -5713,26 +5626,41 @@ int drm_mode_page_flip_ioctl(struct drm_device *dev,
 	}
 
 	if (page_flip->flags & DRM_MODE_PAGE_FLIP_EVENT) {
-		e = kzalloc(sizeof *e, GFP_KERNEL);
-		if (!e) {
-			ret = -ENOMEM;
+		ret = -ENOMEM;
+		spin_lock_irqsave(&dev->event_lock, flags);
+		if (file_priv->event_space < sizeof(e->event)) {
+			spin_unlock_irqrestore(&dev->event_lock, flags);
 			goto out;
 		}
+		file_priv->event_space -= sizeof(e->event);
+		spin_unlock_irqrestore(&dev->event_lock, flags);
+
+		e = kzalloc(sizeof(*e), GFP_KERNEL);
+		if (e == NULL) {
+			spin_lock_irqsave(&dev->event_lock, flags);
+			file_priv->event_space += sizeof(e->event);
+			spin_unlock_irqrestore(&dev->event_lock, flags);
+			goto out;
+		}
+
 		e->event.base.type = DRM_EVENT_FLIP_COMPLETE;
 		e->event.base.length = sizeof(e->event);
 		e->event.user_data = page_flip->user_data;
-		ret = drm_event_reserve_init(dev, file_priv, &e->base, &e->event.base);
-		if (ret) {
-			kfree(e);
-			goto out;
-		}
+		e->base.event = &e->event.base;
+		e->base.file_priv = file_priv;
+		e->base.destroy =
+			(void (*) (struct drm_pending_event *)) kfree;
 	}
 
 	crtc->primary->old_fb = crtc->primary->fb;
 	ret = crtc->funcs->page_flip(crtc, fb, e, page_flip->flags);
 	if (ret) {
-		if (page_flip->flags & DRM_MODE_PAGE_FLIP_EVENT)
-			drm_event_cancel_free(dev, &e->base);
+		if (page_flip->flags & DRM_MODE_PAGE_FLIP_EVENT) {
+			spin_lock_irqsave(&dev->event_lock, flags);
+			file_priv->event_space += sizeof(e->event);
+			spin_unlock_irqrestore(&dev->event_lock, flags);
+			kfree(e);
+		}
 		/* Keep the old fb, don't unref it. */
 		crtc->primary->old_fb = NULL;
 	} else {

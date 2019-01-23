@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __GM7122_TVE_H__
 #define __GM7122_TVE_H__
 

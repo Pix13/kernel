@@ -46,8 +46,10 @@ SwLedOn_8723BU(
 	u8	LedCfg;
 	//HAL_DATA_TYPE	*pHalData = GET_HAL_DATA(padapter);
 
-	if (RTW_CANNOT_RUN(padapter))
+	if( (padapter->bSurpriseRemoved == _TRUE) || ( padapter->bDriverStopped == _TRUE))
+	{
 		return;
+	}
 
 	pLed->bLedOn = _TRUE;
 	
@@ -67,8 +69,10 @@ SwLedOff_8723BU(
 	u8	LedCfg;
 	//HAL_DATA_TYPE	*pHalData = GET_HAL_DATA(padapter);
 
-	if (RTW_CANNOT_RUN(padapter))
+	if(padapter->bSurpriseRemoved == _TRUE)
+	{
 		goto exit;
+	}
 
 exit:
 	pLed->bLedOn = _FALSE;

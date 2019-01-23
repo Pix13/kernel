@@ -1,21 +1,11 @@
 if ARCH_ROCKCHIP || COMPILE_TEST
 
-source "drivers/soc/rockchip/Kconfig.cpu"
-
 #
 # Rockchip Soc drivers
 #
-config ANDROID_VERSION
-	hex "Android Version"
-	depends on ANDROID
-	default "0x07010000"
-	help
-	  The version of Android kernel supported.
-	  The value is 0xAABBCCRR, corresponding to Android A.B.C release R
-
 config ROCKCHIP_CPUINFO
 	bool "Rockchip cpuinfo support"
-	depends on (ROCKCHIP_EFUSE || ROCKCHIP_OTP) && (ARM64 || ARM)
+	depends on ROCKCHIP_EFUSE && (ARM64 || ARM)
 	default y
 	help
 	  Say y here to enable Rockchip cpuinfo support.
@@ -30,28 +20,12 @@ config ROCKCHIP_DEVICEINFO
 	help
 	  Say y here if you have a deviceinfo partition.
 
-config ROCKCHIP_OPP
-	bool "Rockchip OPP select support"
-	depends on PM_DEVFREQ
-	default y
-	help
-	  Say y here to enable rockchip OPP support.
-
 config ROCKCHIP_PM_TEST
 	bool "Rockchip pm_test support"
 	default n
 	help
 	  Say y here to enable pm_test support.
 	  Add /sys/pm_tests/ node, only for internal testing.
-
-config ROCKCHIP_GRF
-	bool
-	default y
-	help
-	  The General Register Files are a central component providing
-	  special additional settings registers for a lot of soc-components.
-	  In a lot of cases there also need to be default settings initialized
-	  to make some of them conform to expectations of the kernel.
 
 config ROCKCHIP_PM_DOMAINS
         bool "Rockchip generic power domain"

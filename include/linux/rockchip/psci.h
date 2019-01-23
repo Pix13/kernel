@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __ROCKCHIP_PSCI_H
 #define __ROCKCHIP_PSCI_H
 

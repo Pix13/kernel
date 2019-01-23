@@ -128,8 +128,6 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  * N 5.12
  *		1. Fix PVRSRVDevicePreClockSpeedChange failed.
  *		2. Apply PP_fix_KM patch from IMG.
- * N 5.13
- *		Add gpu performance interface for cts.
  */
 
 #define PVR_STR(X) #X
@@ -157,5 +155,5 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define PVRVERSION_UNPACK_MIN(VERSION) (((VERSION) >> 0) & 0xFFFF)
 
 //chenli:define rockchip version
-#define RKVERSION                   "Rogue N 5.13"
+#define RKVERSION                   "Rogue N 5.12"
 #endif /* _PVRVERSION_H_ */

@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0
 #
 # Makefile for the Linux IrDA infrared port device drivers.
 #

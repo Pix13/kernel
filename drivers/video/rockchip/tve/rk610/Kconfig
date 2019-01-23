@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0
 config RK610_TVOUT
 	bool "RK610(Jetta) tvout support"
 	depends on MFD_RK610

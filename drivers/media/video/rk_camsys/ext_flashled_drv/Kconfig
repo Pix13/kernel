@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0
 config FLASHLIGHT
 	bool "Flashlight Support"
 	default n

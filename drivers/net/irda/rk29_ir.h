@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __DRIVERS_NET_IRDA_RK29_IR_H
 #define __DRIVERS_NET_IRDA_RK29_IR_H
 

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 
 #ifndef ROCKCHIP_H
 #define ROCKCHIP_H

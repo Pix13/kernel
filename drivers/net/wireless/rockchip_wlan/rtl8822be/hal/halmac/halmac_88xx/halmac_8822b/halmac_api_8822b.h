@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _HALMAC_API_8822B_H_
 #define _HALMAC_API_8822B_H_
 

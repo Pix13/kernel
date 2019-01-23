@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #include <linux/android_alarm.h>
 #include <linux/device.h>
 #include <linux/miscdevice.h>

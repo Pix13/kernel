@@ -17,6 +17,7 @@
 #include <linux/platform_device.h>
 #include <linux/pwm.h>
 #include <linux/time.h>
+#include <linux/rk_fb.h>
 
 #define PWM_CTRL_TIMER_EN	(1 << 0)
 #define PWM_CTRL_OUTPUT_EN	(1 << 3)
@@ -36,11 +37,8 @@ struct rockchip_pwm_chip {
 	struct pwm_chip chip;
 	struct clk *clk;
 	struct clk *pclk;
-	struct pinctrl *pinctrl;
-	struct pinctrl_state *active_state;
 	const struct rockchip_pwm_data *data;
 	void __iomem *base;
-	bool vop_pwm_en; /* indicate voppwm mirror register state */
 };
 
 struct rockchip_pwm_regs {
@@ -55,7 +53,6 @@ struct rockchip_pwm_data {
 	unsigned int prescaler;
 	bool supports_polarity;
 	bool supports_lock;
-	bool vop_pwm;
 	u32 enable_conf;
 	u32 enable_conf_mask;
 };
@@ -111,7 +108,6 @@ static void rockchip_pwm_config(struct pwm_chip *chip, struct pwm_device *pwm,
 {
 	struct rockchip_pwm_chip *pc = to_rockchip_pwm_chip(chip);
 	unsigned long period, duty;
-	unsigned long flags;
 	u64 clk_rate, div;
 	u32 ctrl;
 
@@ -129,19 +125,11 @@ static void rockchip_pwm_config(struct pwm_chip *chip, struct pwm_device *pwm,
 	div = clk_rate * state->duty_cycle;
 	duty = DIV_ROUND_CLOSEST_ULL(div, pc->data->prescaler * NSEC_PER_SEC);
 
-	local_irq_save(flags);
 	/*
 	 * Lock the period and duty of previous configuration, then
 	 * change the duty and period, that would not be effective.
 	 */
 	ctrl = readl_relaxed(pc->base + pc->data->regs.ctrl);
-	if (pc->data->vop_pwm) {
-		if (pc->vop_pwm_en)
-			ctrl |= PWM_ENABLE;
-		else
-			ctrl &= ~PWM_ENABLE;
-	}
-
 	if (pc->data->supports_lock) {
 		ctrl |= PWM_LOCK_EN;
 		writel_relaxed(ctrl, pc->base + pc->data->regs.ctrl);
@@ -167,7 +155,16 @@ static void rockchip_pwm_config(struct pwm_chip *chip, struct pwm_device *pwm,
 		ctrl &= ~PWM_LOCK_EN;
 
 	writel(ctrl, pc->base + pc->data->regs.ctrl);
-	local_irq_restore(flags);
+
+#ifdef CONFIG_FB_ROCKCHIP
+	if (!pc->data->regs.ctrl) {
+		int ret;
+
+		ret = rk_fb_set_vop_pwm();
+		if (ret)
+			dev_err(pc->chip.dev, "rk_fb_set_vop_pwm failed: %d\n", ret);
+	}
+#endif
 }
 
 static int rockchip_pwm_enable(struct pwm_chip *chip,
@@ -194,8 +191,6 @@ static int rockchip_pwm_enable(struct pwm_chip *chip,
 		val &= ~enable_conf;
 
 	writel_relaxed(val, pc->base + pc->data->regs.ctrl);
-	if (pc->data->vop_pwm)
-		pc->vop_pwm_en = enable;
 
 	if (!enable)
 		clk_disable(pc->clk);
@@ -239,8 +234,6 @@ static int rockchip_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 	 */
 	rockchip_pwm_get_state(chip, pwm, state);
 
-	if (state->enabled)
-		ret = pinctrl_select_state(pc->pinctrl, pc->active_state);
 out:
 	clk_disable(pc->pclk);
 
@@ -263,7 +256,6 @@ static const struct rockchip_pwm_data pwm_data_v1 = {
 	.prescaler = 2,
 	.supports_polarity = false,
 	.supports_lock = false,
-	.vop_pwm = false,
 	.enable_conf = PWM_CTRL_OUTPUT_EN | PWM_CTRL_TIMER_EN,
 	.enable_conf_mask = BIT(1) | BIT(3),
 };
@@ -278,7 +270,6 @@ static const struct rockchip_pwm_data pwm_data_v2 = {
 	.prescaler = 1,
 	.supports_polarity = true,
 	.supports_lock = false,
-	.vop_pwm = false,
 	.enable_conf = PWM_OUTPUT_LEFT | PWM_LP_DISABLE | PWM_ENABLE |
 		       PWM_CONTINUOUS,
 	.enable_conf_mask = GENMASK(2, 0) | BIT(5) | BIT(8),
@@ -294,7 +285,6 @@ static const struct rockchip_pwm_data pwm_data_vop = {
 	.prescaler = 1,
 	.supports_polarity = true,
 	.supports_lock = false,
-	.vop_pwm = true,
 	.enable_conf = PWM_OUTPUT_LEFT | PWM_LP_DISABLE | PWM_ENABLE |
 		       PWM_CONTINUOUS,
 	.enable_conf_mask = GENMASK(2, 0) | BIT(5) | BIT(8),
@@ -310,7 +300,6 @@ static const struct rockchip_pwm_data pwm_data_v3 = {
 	.prescaler = 1,
 	.supports_polarity = true,
 	.supports_lock = true,
-	.vop_pwm = false,
 	.enable_conf = PWM_OUTPUT_LEFT | PWM_LP_DISABLE | PWM_ENABLE |
 		       PWM_CONTINUOUS,
 	.enable_conf_mask = GENMASK(2, 0) | BIT(5) | BIT(8),
@@ -383,18 +372,6 @@ static int rockchip_pwm_probe(struct platform_device *pdev)
 	if (ret) {
 		dev_err(&pdev->dev, "Can't prepare APB clk: %d\n", ret);
 		goto err_clk;
-	}
-
-	pc->pinctrl = devm_pinctrl_get(&pdev->dev);
-	if (IS_ERR(pc->pinctrl)) {
-		dev_err(&pdev->dev, "Get pinctrl failed!\n");
-		return PTR_ERR(pc->pinctrl);
-	}
-
-	pc->active_state = pinctrl_lookup_state(pc->pinctrl, "active");
-	if (IS_ERR(pc->active_state)) {
-		dev_err(&pdev->dev, "No active pinctrl state\n");
-		return PTR_ERR(pc->active_state);
 	}
 
 	platform_set_drvdata(pdev, pc);

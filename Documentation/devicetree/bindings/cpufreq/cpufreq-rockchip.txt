@@ -49,18 +49,9 @@ In 'operating-points-v2' table:
                        current temperature is above reference temperature.
 - rockchip,pvtm-thermal-zone: A thermal zone node containing thermal sensor,
                        it's used to get the current temperature.
-- rockchip,thermal-zone: A thermal zone node containing thermal sensor,
-                       it's used to get the current temperature.
 
 - nvmem-cells: A phandle to cpu_leakage data provided by a nvmem device.
 - nvmem-cell-names: Should be "cpu_leakage"
-
-- rockchip,threshold-freq: Clock frequency in KHz, it's used to reduce power
-                       for SoCs with two clusters.
-- rockchip,freq-limit: Only one cluster can contain the property, and the
-                       cluster's maximum frequency will be limited to its
-                       threshold frequency, if the other cluster's frequency
-                       is geater than or equal to its threshold frequency.
 
 Examples:
 

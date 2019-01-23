@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #define SYNC_STATE(p) aic3262_reg_read(p->codec->control_data,AIC3262_DAC_PRB)
 
 #define AIC3262_COPS_MDSP_A	0x30

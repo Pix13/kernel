@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __INC_HALMAC_BIT_8822B_H
 #define __INC_HALMAC_BIT_8822B_H
 

@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0
 CFG_TEE_CORE_CORE_TARGET := armv7
 
 #########################################################################
@@ -19,9 +18,9 @@ ccflags-y+=-DCFG_TEE_DRV_DEBUGFS=${CFG_TEE_DRV_DEBUGFS}
 ccflags-y+=-DCFG_TEE_CORE_LOG_LEVEL=${CFG_TEE_CORE_LOG_LEVEL}
 ccflags-y+=-DCFG_TEE_TA_LOG_LEVEL=${CFG_TEE_TA_LOG_LEVEL}
 
-obj-y += optee_v1.o
+obj-y += optee.o
 
-optee_v1-objs:=   \
+optee-objs:=   \
 		tee_core.o  \
 		tee_context.o  \
 		tee_session.o  \

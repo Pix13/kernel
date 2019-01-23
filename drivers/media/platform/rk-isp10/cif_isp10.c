@@ -460,8 +460,6 @@ static const char *cif_isp10_interface_string(
 		return "DVP_BT601_16Bit";
 	case PLTFRM_CAM_ITF_BT656_16:
 		return "DVP_BT656_16Bit";
-	case PLTFRM_CAM_ITF_BT656_8I:
-		return "DVP_BT656_8Bit_interlace";
 	default:
 		return "UNKNOWN/UNSUPPORTED";
 	}
@@ -685,8 +683,6 @@ static const char *cif_isp10_pix_fmt_string(int pixfmt)
 		return "DATA";
 	case CIF_JPEG:
 		return "JPEG";
-	case CIF_Y10:
-		return "Y10";
 	default:
 		return "unknown/unsupported";
 	}
@@ -1215,7 +1211,7 @@ static int cif_isp10_img_src_select_strm_fmt(
 				matching_format_found = true;
 			}
 		// FIXME::GST set fomat(any@32768x32768) failed, force pass
-		} else if (!matching_format_found) {
+		} else {
 			request_strm_fmt.frm_fmt.width =
 				strm_fmt_desc.min_frmsize.width;
 			request_strm_fmt.frm_fmt.height =
@@ -1337,9 +1333,6 @@ static void cif_isp10_config_ism(struct cif_isp10_device *dev, bool async)
 			dev->config.base_addr + CIF_ISP_IS_H_SIZE);
 		cif_iowrite32(dev->config.isp_config.output.height,
 			dev->config.base_addr + CIF_ISP_IS_V_SIZE);
-		if (PLTFRM_CAM_ITF_INTERLACE(dev->config.cam_itf.type))
-			cif_iowrite32(dev->config.isp_config.output.height / 2,
-				dev->config.base_addr + CIF_ISP_IS_V_SIZE);
 		cif_iowrite32(0,
 			dev->config.base_addr + CIF_ISP_IS_CTRL);
 	}
@@ -1552,21 +1545,14 @@ static int cif_isp10_config_img_src(
 	ret = (int)cif_isp10_img_src_ioctl(dev->img_src,
 		RK_VIDIOC_SENSOR_MODE_DATA, &sensor_mode);
 	if (IS_ERR_VALUE(ret)) {
-		dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_T_INDEX] = 4;
-		dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_G_INDEX] = 4;
+		dev->img_src_exps.exp_valid_frms = 2;
 	} else {
-		if ((sensor_mode.exposure_valid_frame[VALID_FR_EXP_T_INDEX] < 2) ||
-			(sensor_mode.exposure_valid_frame[VALID_FR_EXP_T_INDEX] > 6))
-			dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_T_INDEX] = 4;
+		if ((sensor_mode.exposure_valid_frame < 2) ||
+			(sensor_mode.exposure_valid_frame > 6))
+			dev->img_src_exps.exp_valid_frms = 2;
 		else
-			dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_T_INDEX] =
-				sensor_mode.exposure_valid_frame[VALID_FR_EXP_T_INDEX];
-		if ((sensor_mode.exposure_valid_frame[VALID_FR_EXP_G_INDEX] < 2) ||
-			(sensor_mode.exposure_valid_frame[VALID_FR_EXP_G_INDEX] > 6))
-			dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_G_INDEX] = 2;
-		else
-			dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_G_INDEX] =
-				sensor_mode.exposure_valid_frame[VALID_FR_EXP_G_INDEX];
+			dev->img_src_exps.exp_valid_frms =
+				sensor_mode.exposure_valid_frame;
 	}
 	cif_isp10_pltfrm_pr_dbg(dev->dev,
 		"cam_itf: (type: 0x%x, dphy: %d, vc: %d, nb_lanes: %d, bitrate: %d)",
@@ -1619,8 +1605,7 @@ static int cif_isp10_config_isp(
 	output = &dev->config.isp_config.output;
 	cam_itf = &dev->config.cam_itf;
 
-	if (CIF_ISP10_PIX_FMT_IS_RAW_BAYER(in_pix_fmt) ||
-		(in_pix_fmt == CIF_Y10)) {
+	if (CIF_ISP10_PIX_FMT_IS_RAW_BAYER(in_pix_fmt)) {
 		if (!dev->config.mi_config.raw_enable) {
 			output->pix_fmt = CIF_YUV422I;
 
@@ -1645,23 +1630,15 @@ static int cif_isp10_config_isp(
 			if (dev->sp_stream.state == CIF_ISP10_STATE_READY) {
 				output->quantization =
 				dev->config.mi_config.sp.output.quantization;
-
-				if (in_pix_fmt == CIF_Y10)
-					output->pix_fmt = CIF_YUV400;
 			}
 
 			if (dev->mp_stream.state == CIF_ISP10_STATE_READY) {
 				output->quantization =
-				dev->config.mi_config.mp.output.quantization;
+				dev->config.mi_config.sp.output.quantization;
 			}
 
-			if (in_pix_fmt == CIF_Y10) {
-				cif_iowrite32(0x40c,
-					dev->config.base_addr + CIF_ISP_DEMOSAIC);
-			} else {
-				cif_iowrite32(0xc,
-					dev->config.base_addr + CIF_ISP_DEMOSAIC);
-			}
+			cif_iowrite32(0xc,
+				dev->config.base_addr + CIF_ISP_DEMOSAIC);
 
 			if (PLTFRM_CAM_ITF_IS_BT656(dev->config.cam_itf.type)) {
 				cif_iowrite32(
@@ -1874,21 +1851,6 @@ static int cif_isp10_config_isp(
 		dev->config.base_addr + CIF_ISP_OUT_H_SIZE);
 	cif_iowrite32(output->height,
 		dev->config.base_addr + CIF_ISP_OUT_V_SIZE);
-	if (PLTFRM_CAM_ITF_INTERLACE(cam_itf->type)) {
-		cif_isp10_pltfrm_pr_info(dev->dev,
-			"type %s: input.size %dx%d, output.size %dx%d\n",
-			cif_isp10_interface_string(cam_itf->type),
-			dev->config.isp_config.input->defrect.width,
-			dev->config.isp_config.input->defrect.height,
-			output->width,
-			output->height);
-		cif_iowrite32(
-			dev->config.isp_config.input->defrect.height / 2,
-			dev->config.base_addr + CIF_ISP_ACQ_V_SIZE);
-		cif_iowrite32(
-			output->height / 2,
-			dev->config.base_addr + CIF_ISP_OUT_V_SIZE);
-	}
 
 	dev->isp_dev.input_width =
 		dev->config.isp_config.input->defrect.width;
@@ -1900,11 +1862,7 @@ static int cif_isp10_config_isp(
 		CIF_ISP_FRAME |
 		CIF_ISP_PIC_SIZE_ERROR |
 		CIF_ISP_FRAME_IN |
-		CIF_ISP_V_START |
-		CIF_ISP_AWB_DONE |
-		CIF_ISP_AFM_FIN |
-		CIF_ISP_EXP_END |
-		CIF_ISP_HIST_MEASURE_RDY;
+		CIF_ISP_V_START;
 	cif_iowrite32(irq_mask,
 		dev->config.base_addr + CIF_ISP_IMSC);
 
@@ -2020,8 +1978,6 @@ static int cif_isp10_config_mipi(
 			(CIF_ISP10_PIX_FMT_YUV_GET_Y_SUBS(in_pix_fmt) == 4) &&
 			(CIF_ISP10_PIX_FMT_GET_BPP(in_pix_fmt) == 20))
 			data_type = CSI2_DT_YUV422_10b;
-		else if (in_pix_fmt == CIF_Y10)
-			data_type = CSI2_DT_RAW10;
 		else {
 			cif_isp10_pltfrm_pr_err(dev->dev,
 				"unsupported format %s\n",
@@ -2095,33 +2051,6 @@ err:
 	return ret;
 }
 
-static u32 calc_burst_len(struct cif_isp10_mi_path_config *config)
-{
-	u32 cb_offs = config->cb_offs;
-	u32 cr_offs = config->cr_offs;
-	u32 burst;
-
-	/* MI64bit Y/C base addr should be burstN * 8 aligned */
-	if (!(cb_offs % 128) && !(cr_offs % 128))
-		burst = CIF_MI_CTRL_BURST_LEN_LUM_16 |
-			CIF_MI_CTRL_BURST_LEN_CHROM_16;
-	else if (!(cb_offs % 64) && !(cr_offs % 64))
-		burst = CIF_MI_CTRL_BURST_LEN_LUM_8 |
-			CIF_MI_CTRL_BURST_LEN_CHROM_8;
-	else
-		burst = CIF_MI_CTRL_BURST_LEN_LUM_4 |
-			CIF_MI_CTRL_BURST_LEN_CHROM_4;
-
-	if (cb_offs % 32 || cr_offs % 32)
-		cif_isp10_pltfrm_pr_warn(dev->dev,
-			"%s %dx%d not support, should be %d aligned\n",
-			cif_isp10_pix_fmt_string(config->output.pix_fmt),
-			config->output.width,
-			config->output.height,
-			(cb_offs == cr_offs) ? 32 : 128);
-	return burst;
-}
-
 static int cif_isp10_config_mi_mp(
 	struct cif_isp10_device *dev)
 {
@@ -2138,7 +2067,6 @@ static int cif_isp10_config_mi_mp(
 	u32 bpp = CIF_ISP10_PIX_FMT_GET_BPP(out_pix_fmt);
 	u32 size = llength * height * bpp / 8;
 	u32 mi_ctrl;
-	u32 burst_len;
 
 	dev->config.mi_config.mp.input =
 		&dev->config.mp_config.rsz_config.output;
@@ -2153,8 +2081,6 @@ static int cif_isp10_config_mi_mp(
 	dev->config.mi_config.mp.y_size = size;
 	dev->config.mi_config.mp.cb_size = 0;
 	dev->config.mi_config.mp.cr_size = 0;
-	burst_len = CIF_MI_CTRL_BURST_LEN_LUM_16 |
-		CIF_MI_CTRL_BURST_LEN_CHROM_16;
 	if (CIF_ISP10_PIX_FMT_IS_YUV(out_pix_fmt)) {
 		u32 num_cplanes =
 			CIF_ISP10_PIX_FMT_YUV_GET_NUM_CPLANES(out_pix_fmt);
@@ -2204,7 +2130,6 @@ static int cif_isp10_config_mi_mp(
 					dev->config.mi_config.mp.cb_size;
 			}
 		}
-		burst_len = calc_burst_len(&dev->config.mi_config.mp);
 	} else if (CIF_ISP10_PIX_FMT_IS_RAW_BAYER(out_pix_fmt)) {
 		if (CIF_ISP10_PIX_FMT_GET_BPP(out_pix_fmt) > 8) {
 			writeformat = CIF_ISP10_BUFF_FMT_RAW12;
@@ -2233,26 +2158,17 @@ static int cif_isp10_config_mi_mp(
 		CIF_MI_IMSC, ~0);
 
 	if (swap_cb_cr) {
-		cif_iowrite32OR(CIF_MI_XTD_FMT_CTRL_MP_CB_CR_SWAP,
-			dev->config.base_addr + CIF_MI_XTD_FORMAT_CTRL);
-	} else {
-		cif_iowrite32AND(~CIF_MI_XTD_FMT_CTRL_MP_CB_CR_SWAP,
+		cif_iowrite32OR(swap_cb_cr,
 			dev->config.base_addr + CIF_MI_XTD_FORMAT_CTRL);
 	}
 
-	/* check MP/SP burst config */
-	dev->config.mi_config.mp.burst_len = burst_len;
-	burst_len = (dev->config.mi_config.sp.burst_len >
-		dev->config.mi_config.mp.burst_len) ?
-		dev->config.mi_config.mp.burst_len :
-		dev->config.mi_config.sp.burst_len;
-	mi_ctrl = cif_ioread32(dev->config.base_addr + CIF_MI_CTRL);
-	mi_ctrl &= ~(CIF_MI_CTRL_MP_WRITE_FMT(3));
-	mi_ctrl |= CIF_MI_CTRL_MP_WRITE_FMT(writeformat) |
-		   burst_len |
-		   CIF_MI_CTRL_INIT_BASE_EN |
-		   CIF_MI_CTRL_INIT_OFFSET_EN |
-		   CIF_MI_MP_AUTOUPDATE_ENABLE;
+	mi_ctrl = cif_ioread32(dev->config.base_addr + CIF_MI_CTRL) |
+		CIF_MI_CTRL_MP_WRITE_FMT(writeformat) |
+		CIF_MI_CTRL_BURST_LEN_LUM_64 |
+		CIF_MI_CTRL_BURST_LEN_CHROM_64 |
+		CIF_MI_CTRL_INIT_BASE_EN |
+		CIF_MI_CTRL_INIT_OFFSET_EN |
+		CIF_MI_MP_AUTOUPDATE_ENABLE;
 
 	cif_iowrite32_verify(mi_ctrl,
 		dev->config.base_addr + CIF_MI_CTRL, ~0);
@@ -2262,8 +2178,7 @@ static int cif_isp10_config_mi_mp(
 		"  MI_STATUS 0x%08x\n"
 		"  MI_MP_Y_SIZE %d\n"
 		"  MI_MP_CB_SIZE %d\n"
-		"  MI_MP_CR_SIZE %d\n"
-		"  MI_XTD_FORMAT_CTRL %d\n",
+		"  MI_MP_CR_SIZE %d\n",
 		cif_ioread32(dev->config.base_addr +
 			CIF_MI_CTRL),
 		cif_ioread32(dev->config.base_addr +
@@ -2273,9 +2188,7 @@ static int cif_isp10_config_mi_mp(
 		cif_ioread32(dev->config.base_addr +
 			CIF_MI_MP_CB_SIZE_INIT),
 		cif_ioread32(dev->config.base_addr +
-			CIF_MI_MP_CR_SIZE_INIT),
-		cif_ioread32(dev->config.base_addr +
-			CIF_MI_XTD_FORMAT_CTRL));
+			CIF_MI_MP_CR_SIZE_INIT));
 
 	return 0;
 }
@@ -2300,7 +2213,6 @@ static int cif_isp10_config_mi_sp(
 	u32 size = llength * height * bpp / 8;
 	u32 input_format = 0;
 	u32 output_format;
-	u32 burst_len;
 	u32 mi_ctrl;
 
 	dev->config.mi_config.sp.input =
@@ -2312,30 +2224,6 @@ static int cif_isp10_config_mi_sp(
 		width,
 		height,
 		llength);
-	if (PLTFRM_CAM_ITF_INTERLACE(dev->config.cam_itf.type)) {
-		llength = 2 * llength;
-		height = height / 2;
-		dev->config.mi_config.sp.vir_len_offset =
-			width;
-	}
-	if (llength != width) {
-		if (!(width % 128))
-			burst_len = CIF_MI_CTRL_BURST_LEN_LUM_16 |
-				CIF_MI_CTRL_BURST_LEN_CHROM_16;
-		else if (!(width % 64))
-			burst_len = CIF_MI_CTRL_BURST_LEN_LUM_8 |
-				CIF_MI_CTRL_BURST_LEN_CHROM_8;
-		else
-			burst_len = CIF_MI_CTRL_BURST_LEN_LUM_4 |
-				CIF_MI_CTRL_BURST_LEN_CHROM_4;
-
-		if (width % 32)
-			cif_isp10_pltfrm_pr_warn(dev->dev,
-				"The width should be aligned to 32\n");
-	} else {
-		burst_len = CIF_MI_CTRL_BURST_LEN_LUM_16 |
-			CIF_MI_CTRL_BURST_LEN_CHROM_16;
-	}
 
 	if (!CIF_ISP10_PIX_FMT_IS_YUV(in_pix_fmt)) {
 		cif_isp10_pltfrm_pr_err(dev->dev,
@@ -2353,8 +2241,6 @@ static int cif_isp10_config_mi_sp(
 			CIF_ISP10_PIX_FMT_YUV_GET_NUM_CPLANES(out_pix_fmt);
 		if (num_cplanes == 0) {
 			writeformat = CIF_ISP10_BUFF_FMT_INTERLEAVED;
-			if (out_pix_fmt == CIF_YUV400)
-				writeformat = CIF_ISP10_BUFF_FMT_PLANAR;
 		} else {
 			dev->config.mi_config.sp.y_size =
 				(dev->config.mi_config.sp.y_size * 4) /
@@ -2382,16 +2268,12 @@ static int cif_isp10_config_mi_sp(
 			(CIF_ISP10_PIX_FMT_YUV_GET_Y_SUBS(out_pix_fmt) == 0))
 			output_format = CIF_MI_CTRL_SP_OUTPUT_FMT_YUV400;
 		else if ((CIF_ISP10_PIX_FMT_YUV_GET_X_SUBS(out_pix_fmt) == 2) &&
-			(CIF_ISP10_PIX_FMT_YUV_GET_Y_SUBS(out_pix_fmt) == 2)) {
+			(CIF_ISP10_PIX_FMT_YUV_GET_Y_SUBS(out_pix_fmt) == 2))
 			output_format = CIF_MI_CTRL_SP_OUTPUT_FMT_YUV420;
-			dev->config.mi_config.sp.vir_len_offset =
-				width;
-		} else if ((CIF_ISP10_PIX_FMT_YUV_GET_X_SUBS(out_pix_fmt) == 2) &&
-			(CIF_ISP10_PIX_FMT_YUV_GET_Y_SUBS(out_pix_fmt) == 4)) {
+		else if ((CIF_ISP10_PIX_FMT_YUV_GET_X_SUBS(out_pix_fmt) == 2) &&
+			(CIF_ISP10_PIX_FMT_YUV_GET_Y_SUBS(out_pix_fmt) == 4))
 			output_format = CIF_MI_CTRL_SP_OUTPUT_FMT_YUV422;
-			dev->config.mi_config.sp.vir_len_offset =
-				width * 2;
-		} else if ((CIF_ISP10_PIX_FMT_YUV_GET_X_SUBS(out_pix_fmt) == 4) &&
+		else if ((CIF_ISP10_PIX_FMT_YUV_GET_X_SUBS(out_pix_fmt) == 4) &&
 			(CIF_ISP10_PIX_FMT_YUV_GET_Y_SUBS(out_pix_fmt) == 4))
 			output_format = CIF_MI_CTRL_SP_OUTPUT_FMT_YUV444;
 		else {
@@ -2465,10 +2347,6 @@ static int cif_isp10_config_mi_sp(
 		}
 	}
 
-	if (llength == width &&
-		CIF_ISP10_PIX_FMT_IS_YUV(out_pix_fmt))
-		burst_len = calc_burst_len(&dev->config.mi_config.sp);
-
 	cif_iowrite32_verify(dev->config.mi_config.sp.y_size,
 		dev->config.base_addr + CIF_MI_SP_Y_SIZE_INIT,
 		CIF_MI_ADDR_SIZE_ALIGN_MASK);
@@ -2492,28 +2370,16 @@ static int cif_isp10_config_mi_sp(
 		CIF_MI_IMSC, ~0);
 
 	if (swap_cb_cr) {
-		cif_iowrite32OR(CIF_MI_XTD_FMT_CTRL_SP_CB_CR_SWAP,
-			dev->config.base_addr + CIF_MI_XTD_FORMAT_CTRL);
-	} else {
-		cif_iowrite32AND(~CIF_MI_XTD_FMT_CTRL_SP_CB_CR_SWAP,
+		cif_iowrite32OR(swap_cb_cr,
 			dev->config.base_addr + CIF_MI_XTD_FORMAT_CTRL);
 	}
 
-	dev->config.mi_config.sp.burst_len = burst_len;
-	burst_len = (dev->config.mi_config.sp.burst_len >
-		dev->config.mi_config.mp.burst_len) ?
-		dev->config.mi_config.mp.burst_len :
-		dev->config.mi_config.sp.burst_len;
-	mi_ctrl = cif_ioread32(dev->config.base_addr + CIF_MI_CTRL);
-	mi_ctrl &= ~(CIF_MI_CTRL_SP_WRITE_FMT(3) |/* SP_WRITE_FMT */
-		(0x7 << 28) |	/* SP_OUTPUT_FMT */
-		(0x3 << 26) |	/* SP_INPUT_FMT */
-		(0xF << 16));	/* burst_len_chrom &  burst_len_lum */
-	mi_ctrl = mi_ctrl |
+	mi_ctrl = cif_ioread32(dev->config.base_addr + CIF_MI_CTRL) |
 		CIF_MI_CTRL_SP_WRITE_FMT(writeformat) |
 		input_format |
 		output_format |
-		burst_len |
+		CIF_MI_CTRL_BURST_LEN_LUM_64 |
+		CIF_MI_CTRL_BURST_LEN_CHROM_64 |
 		CIF_MI_CTRL_INIT_BASE_EN |
 		CIF_MI_CTRL_INIT_OFFSET_EN |
 		CIF_MI_SP_AUTOUPDATE_ENABLE;
@@ -2529,8 +2395,7 @@ static int cif_isp10_config_mi_sp(
 		"  MI_SP_PIC_WIDTH %d\n"
 		"  MI_SP_PIC_HEIGHT %d\n"
 		"  MI_SP_PIC_LLENGTH %d\n"
-		"  MI_SP_PIC_SIZE %d\n"
-		"  MI_XTD_FORMAT_CTRL %d\n",
+		"  MI_SP_PIC_SIZE %d\n",
 		cif_ioread32(dev->config.base_addr + CIF_MI_CTRL),
 		cif_ioread32(dev->config.base_addr + CIF_MI_STATUS),
 		cif_ioread32(dev->config.base_addr + CIF_MI_SP_Y_SIZE_INIT),
@@ -2539,8 +2404,7 @@ static int cif_isp10_config_mi_sp(
 		cif_ioread32(dev->config.base_addr + CIF_MI_SP_Y_PIC_WIDTH),
 		cif_ioread32(dev->config.base_addr + CIF_MI_SP_Y_PIC_HEIGHT),
 		cif_ioread32(dev->config.base_addr + CIF_MI_SP_Y_LLENGTH),
-		cif_ioread32(dev->config.base_addr + CIF_MI_SP_Y_PIC_SIZE),
-		cif_ioread32(dev->config.base_addr + CIF_MI_XTD_FORMAT_CTRL));
+		cif_ioread32(dev->config.base_addr + CIF_MI_SP_Y_PIC_SIZE));
 
 	return 0;
 err:
@@ -2650,12 +2514,11 @@ static int cif_isp10_config_mi_dma(
 	cif_iowrite32_verify(llength,
 		dev->config.base_addr + CIF_MI_DMA_Y_LLENGTH, ~0x3);
 
-	mi_ctrl = cif_ioread32(dev->config.base_addr + CIF_MI_DMA_CTRL);
-	mi_ctrl &= ~(CIF_MI_DMA_CTRL_READ_FMT(3) & CIF_MI_DMA_CTRL_FMT_YUV444);
-	mi_ctrl |= CIF_MI_DMA_CTRL_READ_FMT(readformat) |
-		   output_format |
-		   CIF_MI_DMA_CTRL_BURST_LEN_LUM_64 |
-		   CIF_MI_DMA_CTRL_BURST_LEN_CHROM_64;
+	mi_ctrl = cif_ioread32(dev->config.base_addr + CIF_MI_DMA_CTRL) |
+		CIF_MI_DMA_CTRL_READ_FMT(readformat) |
+		output_format |
+		CIF_MI_DMA_CTRL_BURST_LEN_LUM_64 |
+		CIF_MI_DMA_CTRL_BURST_LEN_CHROM_64;
 	cif_iowrite32_verify(mi_ctrl,
 		dev->config.base_addr + CIF_MI_DMA_CTRL, ~0);
 
@@ -3424,11 +3287,16 @@ static int cif_isp10_config_cif(
 		cif_isp10_pltfrm_pr_dbg(dev->dev,
 			"CIF_ID 0x%08x\n", cif_id);
 
-		cif_isp10_pltfrm_reset(dev);
-		cif_isp10_config_clk(dev);
+		/*
+		 * Cancel isp reset internal here temporary for
+		 * isp bus may be dead when switch isp.
+		 */
+		/*
+		 * cif_iowrite32(CIF_IRCL_CIF_SW_RST,
+		 * dev->config.base_addr + CIF_IRCL);
+		 */
 
-		cifisp_frame_id_reset(&dev->isp_dev);
-		dev->isp_dev.frame_id_setexp = 0;
+		cif_isp10_config_clk(dev);
 
 		/* Decide when to switch to asynchronous mode */
 		/*
@@ -3543,48 +3411,34 @@ static void cif_isp10_init_stream(
 	struct cif_isp10_device *dev,
 	enum cif_isp10_stream_id stream_id)
 {
-	int ret = 0;
 	struct cif_isp10_stream *stream = NULL;
 	struct cif_isp10_frm_fmt frm_fmt;
+
+	frm_fmt.pix_fmt = CIF_YUV422I;
+	frm_fmt.width = dev->config.img_src_output.frm_fmt.width;
+	frm_fmt.height = dev->config.img_src_output.frm_fmt.height;
+	frm_fmt.stride = dev->config.img_src_output.frm_fmt.stride;
+	frm_fmt.quantization = 0;
 
 	switch (stream_id) {
 	case CIF_ISP10_STREAM_SP:
 		stream = &dev->sp_stream;
-		stream->state = CIF_ISP10_STATE_READY;
-
 		dev->config.sp_config.rsz_config.ycflt_adjust = false;
 		dev->config.sp_config.rsz_config.ism_adjust = false;
 		dev->config.mi_config.sp.busy = false;
-		dev->config.mi_config.sp.burst_len =
-			CIF_MI_CTRL_BURST_LEN_LUM_16 |
-			CIF_MI_CTRL_BURST_LEN_CHROM_16;
+
+		// init default formats
+		dev->config.mi_config.sp.output = frm_fmt;
+		dev->config.mi_config.sp.llength =
+			cif_isp10_calc_llength(
+			frm_fmt.width,
+			frm_fmt.stride,
+			frm_fmt.pix_fmt);
+
 		dev->sp_stream.updt_cfg = true;
-
-		ret = cif_isp10_img_src_select_strm_fmt(dev);
-		if (IS_ERR_VALUE(ret)) {
-			dev->sp_stream.updt_cfg = false;
-		} else {
-			frm_fmt.pix_fmt = CIF_YUV420SP;
-			frm_fmt.width =
-				dev->config.img_src_output.frm_fmt.width;
-			frm_fmt.height =
-				dev->config.img_src_output.frm_fmt.height;
-			frm_fmt.stride = 0;
-			frm_fmt.quantization = 0;
-
-			// init default formats
-			dev->config.mi_config.sp.output = frm_fmt;
-			dev->config.mi_config.sp.llength =
-				cif_isp10_calc_llength(
-				frm_fmt.width,
-				frm_fmt.stride,
-				frm_fmt.pix_fmt);
-		}
 		break;
 	case CIF_ISP10_STREAM_MP:
 		stream = &dev->mp_stream;
-		stream->state = CIF_ISP10_STATE_READY;
-
 		dev->config.jpeg_config.ratio = 50;
 		dev->config.jpeg_config.header =
 			CIF_ISP10_JPEG_HEADER_JFIF;
@@ -3593,33 +3447,18 @@ static void cif_isp10_init_stream(
 		dev->config.mp_config.rsz_config.ycflt_adjust = false;
 		dev->config.mp_config.rsz_config.ism_adjust = false;
 		dev->config.mi_config.mp.busy = false;
-		dev->config.mi_config.mp.burst_len =
-			CIF_MI_CTRL_BURST_LEN_LUM_16 |
-			CIF_MI_CTRL_BURST_LEN_CHROM_16;
+
+		// init default formats
+		dev->config.mi_config.mp.output = frm_fmt;
+		dev->config.mi_config.mp.output.stride = frm_fmt.stride;
+
+		dev->config.mi_config.mp.llength =
+			cif_isp10_calc_llength(
+				frm_fmt.width,
+				frm_fmt.stride,
+				frm_fmt.pix_fmt);
+
 		dev->mp_stream.updt_cfg = true;
-
-		ret = cif_isp10_img_src_select_strm_fmt(dev);
-		if (IS_ERR_VALUE(ret)) {
-			dev->mp_stream.updt_cfg = false;
-		} else {
-			frm_fmt.pix_fmt = CIF_YUV420SP;
-			frm_fmt.width =
-				dev->config.img_src_output.frm_fmt.width;
-			frm_fmt.height =
-				dev->config.img_src_output.frm_fmt.height;
-			frm_fmt.stride = 0;
-			frm_fmt.quantization = 0;
-
-			// init default formats
-			dev->config.mi_config.mp.output = frm_fmt;
-			dev->config.mi_config.mp.output.stride = frm_fmt.stride;
-
-			dev->config.mi_config.mp.llength =
-				cif_isp10_calc_llength(
-					frm_fmt.width,
-					frm_fmt.stride,
-					frm_fmt.pix_fmt);
-		}
 		break;
 	case CIF_ISP10_STREAM_DMA:
 		stream = &dev->dma_stream;
@@ -3638,14 +3477,15 @@ static void cif_isp10_init_stream(
 	stream->curr_buf = NULL;
 	stream->stop = false;
 	stream->stall = false;
-	spin_lock_init(&stream->metadata.spinlock);
 
 	cif_isp10_pltfrm_event_clear(dev->dev, &stream->done);
 
-	if (!stream->updt_cfg)
+	if (stream->updt_cfg) {
+		stream->state = CIF_ISP10_STATE_READY;
+		cif_isp10_img_src_select_strm_fmt(dev);
+	} else {
 		stream->state = CIF_ISP10_STATE_INACTIVE;
-
-	return;
+	}
 }
 
 static int cif_isp10_jpeg_gen_header(
@@ -3926,8 +3766,6 @@ err:
 static int cif_isp10_update_mi_sp(
 	struct cif_isp10_device *dev)
 {
-	u32 vir_len_offset = dev->config.mi_config.sp.vir_len_offset;
-
 	cif_isp10_pltfrm_pr_dbg(NULL,
 		"curr 0x%08x next 0x%08x\n",
 		dev->config.mi_config.sp.curr_buff_addr,
@@ -3954,57 +3792,6 @@ static int cif_isp10_update_mi_sp(
 		cif_isp10_mi_update_buff_addr(dev, CIF_ISP10_STREAM_SP);
 		dev->config.mi_config.sp.curr_buff_addr =
 			dev->config.mi_config.sp.next_buff_addr;
-	} else if (PLTFRM_CAM_ITF_INTERLACE(dev->config.cam_itf.type) &&
-		dev->config.mi_config.sp.field_flag == FIELD_FLAGS_ODD) {
-		cif_iowrite32_verify(dev->config.mi_config.sp.next_buff_addr +
-			vir_len_offset,
-			dev->config.base_addr +
-			CIF_MI_SP_Y_BASE_AD_INIT, CIF_MI_ADDR_SIZE_ALIGN_MASK);
-		cif_iowrite32_verify(dev->config.mi_config.sp.next_buff_addr +
-			vir_len_offset +
-			dev->config.mi_config.sp.cb_offs,
-			dev->config.base_addr +
-			CIF_MI_SP_CB_BASE_AD_INIT, CIF_MI_ADDR_SIZE_ALIGN_MASK);
-		cif_iowrite32_verify(dev->config.mi_config.sp.next_buff_addr +
-			vir_len_offset +
-			dev->config.mi_config.sp.cr_offs,
-			dev->config.base_addr +
-			CIF_MI_SP_CR_BASE_AD_INIT, CIF_MI_ADDR_SIZE_ALIGN_MASK);
-		/*
-		 * There have bee repeatedly issues with
-		 * the offset registers, it is safer to write
-		 * them each time, even though it is always
-		 * 0 and even though that is the
-		 * register's default value
-		 */
-		cif_iowrite32_verify(0,
-			dev->config.base_addr +
-			CIF_MI_SP_Y_OFFS_CNT_INIT,
-			CIF_MI_ADDR_SIZE_ALIGN_MASK);
-		cif_iowrite32_verify(0,
-			dev->config.base_addr +
-			CIF_MI_SP_CB_OFFS_CNT_INIT,
-			CIF_MI_ADDR_SIZE_ALIGN_MASK);
-		cif_iowrite32_verify(0,
-			dev->config.base_addr +
-			CIF_MI_SP_CR_OFFS_CNT_INIT,
-			CIF_MI_ADDR_SIZE_ALIGN_MASK);
-		cif_isp10_pltfrm_pr_dbg(dev->dev,
-			"\n MI_SP_Y_BASE_AD 0x%08x/0x%08x\n"
-			" MI_SP_CB_BASE_AD 0x%08x/0x%08x\n"
-			" MI_SP_CR_BASE_AD 0x%08x/0x%08x\n",
-			cif_ioread32(dev->config.base_addr +
-				CIF_MI_SP_Y_BASE_AD_INIT),
-			cif_ioread32(dev->config.base_addr +
-				CIF_MI_SP_Y_BASE_AD_SHD),
-			cif_ioread32(dev->config.base_addr +
-				CIF_MI_SP_CB_BASE_AD_INIT),
-			cif_ioread32(dev->config.base_addr +
-				CIF_MI_SP_CB_BASE_AD_SHD),
-			cif_ioread32(dev->config.base_addr +
-				CIF_MI_SP_CR_BASE_AD_INIT),
-			cif_ioread32(dev->config.base_addr +
-				CIF_MI_SP_CR_BASE_AD_SHD));
 	}
 
 	return 0;
@@ -4028,25 +3815,6 @@ static int cif_isp10_s_fmt_mp(
 		strm_fmt->frm_fmt.quantization);
 
 	/* TBD: check whether format is a valid format for MP */
-	if (strm_fmt->frm_fmt.pix_fmt == CIF_YUV400) {
-		cif_isp10_pltfrm_pr_err(dev->dev,
-			"format %s %dx%d@%d/%dfps, stride = %d not supported on MP\n",
-			cif_isp10_pix_fmt_string(strm_fmt->frm_fmt.pix_fmt),
-			strm_fmt->frm_fmt.width,
-			strm_fmt->frm_fmt.height,
-			strm_fmt->frm_intrvl.numerator,
-			strm_fmt->frm_intrvl.denominator,
-			stride);
-		ret = -EINVAL;
-		goto err;
-	}
-
-	if (PLTFRM_CAM_ITF_INTERLACE(dev->config.cam_itf.type)) {
-		ret = -EINVAL;
-		cif_isp10_pltfrm_pr_err(dev->dev,
-			"MP doesn't support the interlace format!\n");
-		goto err;
-	}
 
 	if (CIF_ISP10_PIX_FMT_IS_JPEG(strm_fmt->frm_fmt.pix_fmt)) {
 		dev->config.jpeg_config.enable = true;
@@ -4368,9 +4136,7 @@ static int cif_isp10_mi_frame_end(
 			&stream->next_buf->vb.vb2_buf, 0);
 		tmp_addr = sg_dma_address(sgt->sgl);
 #endif
-		if (tmp_addr != cif_ioread32(y_base_addr) &&
-			(!PLTFRM_CAM_ITF_INTERLACE(dev->config.cam_itf.type) ||
-			dev->config.mi_config.sp.field_flag == FIELD_FLAGS_ODD)) {
+		if (tmp_addr != cif_ioread32(y_base_addr)) {
 			cif_isp10_pltfrm_pr_warn(dev->dev,
 				"%s buffer queue is not advancing (0x%08x/0x%08x)\n",
 				cif_isp10_stream_id_string(stream_id),
@@ -4392,34 +4158,23 @@ static int cif_isp10_mi_frame_end(
 		 * until new buffer queue;
 		 */
 		if ((stream->curr_buf) &&
-			(stream->next_buf) &&
-			(!PLTFRM_CAM_ITF_INTERLACE(dev->config.cam_itf.type) ||
-			dev->config.mi_config.sp.field_flag == FIELD_FLAGS_EVEN)) {
+			(stream->next_buf)) {
 			bool wake_now;
 
 			vb2_buf = &stream->curr_buf->vb.vb2_buf;
 			vb2_buffer_done(vb2_buf, VB2_BUF_STATE_DONE);
 			wake_now = false;
 
-			spin_lock(&stream->metadata.spinlock);
 			if (stream->metadata.d && dev->isp_dev.streamon) {
 				struct v4l2_buffer_metadata_s *metadata;
-				unsigned int meta_read_id;
 
 				metadata = (struct v4l2_buffer_metadata_s *)
 					(stream->metadata.d +
 					stream->curr_buf->vb.vb2_buf.index *
 					CAMERA_METADATA_LEN);
-				meta_read_id = dev->isp_dev.meta_info.read_id;
-				metadata->frame_id = dev->isp_dev.meta_info.frame_id[meta_read_id];
-				metadata->frame_t.vs_t = dev->isp_dev.meta_info.vs_t[meta_read_id];
-				metadata->frame_t.fi_t = dev->isp_dev.meta_info.fi_t[meta_read_id];
-				dev->isp_dev.meta_info.read_cnt++;
-				if (dev->isp_dev.meta_info.read_cnt >= dev->isp_dev.meta_info.read_max) {
-					dev->isp_dev.meta_info.read_cnt = 0;
-					dev->isp_dev.meta_info.read_id = (meta_read_id + 1) % CIF_ISP10_META_INFO_NUM;
-				}
-				spin_unlock(&stream->metadata.spinlock);
+				metadata->frame_id = dev->isp_dev.frame_id;
+				metadata->frame_t.vs_t = dev->isp_dev.vs_t;
+				metadata->frame_t.fi_t = dev->isp_dev.fi_t;
 
 				work = (struct cif_isp10_isp_readout_work *)
 					kmalloc(
@@ -4434,12 +4189,10 @@ static int cif_isp10_mi_frame_end(
 					work->isp_dev =
 						&dev->isp_dev;
 					work->frame_id =
-						metadata->frame_id;
+						dev->isp_dev.frame_id;
 					work->vb =
 						&stream->curr_buf->vb.vb2_buf;
 					work->stream_id = stream->id;
-					work->isp_metadata =
-						(struct cifisp_isp_metadata *)metadata->isp;
 					if (!queue_work(dev->isp_dev.readout_wq,
 						(struct work_struct *)work)) {
 						cif_isp10_pltfrm_pr_err(
@@ -4454,7 +4207,6 @@ static int cif_isp10_mi_frame_end(
 					wake_now = true;
 				}
 			} else {
-				spin_unlock(&stream->metadata.spinlock);
 				wake_now = true;
 			}
 
@@ -4564,78 +4316,14 @@ static int cif_isp10_mi_frame_end(
 	return 0;
 }
 
-static int cif_isp10_update_mi_immediate(
-	struct cif_isp10_device *dev,
-	enum cif_isp10_stream_id stream_id)
-{
-	struct cif_isp10_stream *stream;
-	u32 *next_buff_addr;
-	CIF_ISP10_PLTFRM_MEM_IO_ADDR y_base_addr;
-#ifdef CIF_ISP10_MODE_DMA_SG
-	struct sg_table *sgt = NULL;
-#endif
-	int (*update_mi)(
-		struct cif_isp10_device *dev);
-
-	if (stream_id == CIF_ISP10_STREAM_MP) {
-		stream = &dev->mp_stream;
-		y_base_addr =
-			dev->config.base_addr + CIF_MI_MP_Y_BASE_AD_SHD;
-		next_buff_addr = &dev->config.mi_config.mp.next_buff_addr;
-		update_mi = cif_isp10_update_mi_mp;
-	} else if (stream_id == CIF_ISP10_STREAM_SP) {
-		stream = &dev->sp_stream;
-		y_base_addr =
-			dev->config.base_addr + CIF_MI_SP_Y_BASE_AD_SHD;
-		next_buff_addr = &dev->config.mi_config.sp.next_buff_addr;
-		update_mi = cif_isp10_update_mi_sp;
-	} else {
-		BUG();
-	}
-
-	if (stream->state != CIF_ISP10_STATE_STREAMING)
-		return 0;
-
-	if (stream->next_buf)
-		return 0;
-
-	if (!list_empty(&stream->buf_queue)) {
-		stream->next_buf =
-			list_first_entry(&stream->buf_queue,
-				struct cif_isp10_buffer, queue);
-		list_del(&stream->next_buf->queue);
-#ifdef CIF_ISP10_MODE_DMA_CONTIG
-		*next_buff_addr = vb2_dma_contig_plane_dma_addr(
-			&stream->next_buf->vb.vb2_buf, 0);
-#endif
-#ifdef CIF_ISP10_MODE_DMA_SG
-		sgt = vb2_dma_sg_plane_desc(
-			&stream->next_buf->vb.vb2_buf, 0);
-		*next_buff_addr = sg_dma_address(sgt->sgl);
-#endif
-	}
-
-	update_mi(dev);
-
-	cif_isp10_pltfrm_pr_dbg(dev->dev,
-		"%s curr_buff: %d, next_buf: %d, 0x%x\n",
-		cif_isp10_stream_id_string(stream_id),
-		(stream->curr_buf) ? stream->curr_buf->vb.vb2_buf.index : -1,
-		(stream->next_buf) ? stream->next_buf->vb.vb2_buf.index : -1,
-		*next_buff_addr);
-	return 0;
-}
-
 static void cif_isp10_stream_metadata_reset(
 	struct cif_isp10_stream *stream_dev
 )
 {
 	unsigned int i;
-	unsigned long flags = 0;
 	struct v4l2_buffer_metadata_s *metadata;
 	struct cifisp_isp_metadata *isp_metadata;
 
-	spin_lock_irqsave(&stream_dev->metadata.spinlock, flags);
 	if (stream_dev->metadata.d) {
 		for (i = 0; i < stream_dev->metadata.cnt; i++) {
 			metadata = (struct v4l2_buffer_metadata_s *)
@@ -4647,7 +4335,6 @@ static void cif_isp10_stream_metadata_reset(
 			isp_metadata->meas_cfg.s_frame_id = 0xffffffff;
 		}
 	}
-	spin_unlock_irqrestore(&stream_dev->metadata.spinlock, flags);
 }
 
 static void cif_isp10_start_mi(
@@ -4764,9 +4451,6 @@ static void cif_isp10_stop_mi(
 			dev->config.base_addr + CIF_MI_ICR);
 		cif_iowrite32AND_verify(~CIF_MI_CTRL_SP_ENABLE,
 			dev->config.base_addr + CIF_MI_CTRL, ~0);
-		dev->config.mi_config.sp.burst_len =
-			CIF_MI_CTRL_BURST_LEN_LUM_16 |
-			CIF_MI_CTRL_BURST_LEN_CHROM_16;
 	} else if (stop_mi_mp) {
 		cif_iowrite32(CIF_MI_MP_FRAME |
 			CIF_JPE_STATUS_ENCODE_DONE,
@@ -4775,9 +4459,6 @@ static void cif_isp10_stop_mi(
 			CIF_MI_CTRL_JPEG_ENABLE |
 			CIF_MI_CTRL_RAW_ENABLE),
 			dev->config.base_addr + CIF_MI_CTRL, ~0);
-		dev->config.mi_config.mp.burst_len =
-			CIF_MI_CTRL_BURST_LEN_LUM_16 |
-			CIF_MI_CTRL_BURST_LEN_CHROM_16;
 	}
 }
 
@@ -4876,7 +4557,7 @@ static int cif_isp10_stop(
 {
 	unsigned long flags = 0;
 	bool stop_all;
-	unsigned long isp_ctrl;
+	int timeout;
 
 	cif_isp10_pltfrm_pr_dbg(dev->dev,
 		"SP state = %s, MP state = %s, img_src state = %s, stop_sp = %d, stop_mp = %d\n",
@@ -4910,15 +4591,12 @@ static int cif_isp10_stop(
 		cif_isp10_stop_sp(dev);
 		cif_isp10_stop_dma(dev);
 
+		local_irq_save(flags);
 		/* stop and clear MI, MIPI, and ISP interrupts */
 		cif_iowrite32(0, dev->config.base_addr + CIF_MIPI_IMSC);
 		cif_iowrite32(~0, dev->config.base_addr + CIF_MIPI_ICR);
 
-		spin_lock_irqsave(&dev->isp_state_lock, flags);
-		dev->isp_state = CIF_ISP10_STATE_STOPPING;
-		spin_unlock_irqrestore(&dev->isp_state_lock, flags);
-		dev->isp_stop_flags = 0;
-		cif_iowrite32(CIF_ISP_OFF, dev->config.base_addr + CIF_ISP_IMSC);
+		cif_iowrite32(0, dev->config.base_addr + CIF_ISP_IMSC);
 		cif_iowrite32(~0, dev->config.base_addr + CIF_ISP_ICR);
 
 		cif_iowrite32_verify(0,
@@ -4934,21 +4612,13 @@ static int cif_isp10_stop(
 		cif_iowrite32OR(CIF_ISP_CTRL_ISP_CFG_UPD,
 			dev->config.base_addr + CIF_ISP_CTRL);
 
-		wait_event_interruptible_timeout(dev->isp_stop_wait,
-						dev->isp_stop_flags != 0,
-						HZ);
-
-		isp_ctrl = cif_ioread32(dev->config.base_addr + CIF_ISP_CTRL);
-		if ((isp_ctrl & 0x0001) != 0) {
-			cif_isp10_pltfrm_pr_err(dev->dev,
-				"Stop ISP Failure(0x%lx)!\n", isp_ctrl);
-		} else {
-			spin_lock_irqsave(&dev->isp_state_lock, flags);
-			dev->isp_state = CIF_ISP10_STATE_IDLE;
-			spin_unlock_irqrestore(&dev->isp_state_lock, flags);
-		}
-
-		cifisp_clr_readout_wq(&dev->isp_dev);
+		timeout = 100;
+		while ((timeout-- > 0) &&
+			((cif_ioread32(dev->config.base_addr + CIF_ISP_RIS)
+			& CIF_ISP_OFF) != CIF_ISP_OFF)) {
+			msleep(20);
+		};
+		local_irq_restore(flags);
 
 		if (!CIF_ISP10_INP_IS_DMA(dev->config.input_sel)) {
 			if (IS_ERR_VALUE(cif_isp10_img_src_set_state(dev,
@@ -4960,12 +4630,11 @@ static int cif_isp10_stop(
 			CIF_ISP10_PM_STATE_SW_STNDBY)))
 			cif_isp10_pltfrm_pr_dbg(dev->dev,
 			"unable to put CIF into standby\n");
-
-		dev->mp_stream.updt_cfg = true;
-		dev->sp_stream.updt_cfg = true;
 	} else if (stop_sp) {
 		if (!dev->config.mi_config.async_updt) {
+			local_irq_save(flags);
 			cif_isp10_stop_mi(dev, true, false);
+			local_irq_restore(flags);
 		}
 		cif_isp10_stop_sp(dev);
 		cif_iowrite32AND_verify(~CIF_MI_SP_FRAME,
@@ -4973,7 +4642,9 @@ static int cif_isp10_stop(
 
 	} else /* stop_mp */ {
 		if (!dev->config.mi_config.async_updt) {
+			local_irq_save(flags);
 			cif_isp10_stop_mi(dev, false, true);
+			local_irq_restore(flags);
 		}
 		cif_isp10_stop_mp(dev);
 		cif_iowrite32AND_verify(~(CIF_MI_MP_FRAME |
@@ -5021,7 +4692,6 @@ static int cif_isp10_start(
 {
 	unsigned int ret;
 	struct vb2_buffer *vb, *n;
-	unsigned long flags;
 
 	cif_isp10_pltfrm_pr_dbg(dev->dev,
 		"SP state = %s, MP state = %s, DMA state = %s, img_src state = %s, start_sp = %d, start_mp = %d\n",
@@ -5062,10 +4732,6 @@ static int cif_isp10_start(
 				CIF_ISP_CTRL_ISP_INFORM_ENABLE |
 				CIF_ISP_CTRL_ISP_ENABLE,
 				dev->config.base_addr + CIF_ISP_CTRL);
-
-		spin_lock_irqsave(&dev->isp_state_lock, flags);
-		dev->isp_state = CIF_ISP10_STATE_RUNNING;
-		spin_unlock_irqrestore(&dev->isp_state_lock, flags);
 	}
 
 	if (start_sp &&
@@ -5088,7 +4754,7 @@ static int cif_isp10_start(
 		 */
 		mdelay(1);
 		/* start sensor output! */
-		cifisp_frame_id_reset(&dev->isp_dev);
+		dev->isp_dev.frame_id = 0;
 		dev->isp_dev.frame_id_setexp = 0;
 
 		list_for_each_entry_safe(
@@ -5105,23 +4771,11 @@ static int cif_isp10_start(
 		cif_isp10_img_src_ioctl(dev->img_src,
 			RK_VIDIOC_SENSOR_MODE_DATA,
 			&dev->img_src_exps.data[0].data);
+		cif_isp10_img_src_ioctl(dev->img_src,
+			RK_VIDIOC_SENSOR_MODE_DATA,
+			&dev->img_src_exps.data[1].data);
 		dev->img_src_exps.data[0].v_frame_id = 0;
 		dev->img_src_exps.data[1].v_frame_id = 0;
-		dev->img_src_exps.data[0].data.isp_input_width =
-			dev->config.isp_config.input->defrect.width;
-		dev->img_src_exps.data[0].data.isp_input_height =
-			dev->config.isp_config.input->defrect.height;
-		dev->img_src_exps.data[0].data.isp_input_horizontal_start =
-			dev->config.isp_config.input->defrect.left;
-		dev->img_src_exps.data[0].data.isp_input_vertical_start =
-			dev->config.isp_config.input->defrect.top;
-
-		dev->img_src_exps.data[0].data.isp_output_width =
-			dev->config.isp_config.output.width;
-		dev->img_src_exps.data[0].data.isp_output_height =
-			dev->config.isp_config.output.height;
-		memcpy(&dev->img_src_exps.data[1], &dev->img_src_exps.data[0],
-			sizeof(dev->img_src_exps.data[0]));
 		mutex_unlock(&dev->img_src_exps.mutex);
 
 		cif_isp10_pltfrm_rtrace_printf(dev->dev,
@@ -5137,13 +4791,6 @@ static int cif_isp10_start(
 		dev->dma_stream.stop = false;
 		cif_isp10_dma_next_buff(dev);
 	}
-
-	dev->isp_dev.meta_info.read_cnt = 0;
-	dev->isp_dev.meta_info.read_max = 0;
-	if (dev->sp_stream.state == CIF_ISP10_STATE_STREAMING)
-		dev->isp_dev.meta_info.read_max++;
-	if (dev->mp_stream.state == CIF_ISP10_STATE_STREAMING)
-		dev->isp_dev.meta_info.read_max++;
 
 	cif_isp10_pltfrm_pr_dbg(dev->dev,
 		"SP state = %s, MP state = %s, DMA state = %s, img_src state = %s\n"
@@ -5438,13 +5085,12 @@ static void cif_isp10_vs_work(struct work_struct *work)
 	struct cif_isp10_isp_vs_work *vs_wk =
 		container_of(work, struct cif_isp10_isp_vs_work, work);
 	struct cif_isp10_device *dev = vs_wk->dev;
-	unsigned int v_frame_id;
 
 	switch (vs_wk->cmd) {
 	case CIF_ISP10_VS_EXP: {
 		struct cif_isp10_img_src_exp *exp =
 			(struct cif_isp10_img_src_exp *)vs_wk->param;
-		struct cif_isp10_img_src_ext_ctrl *exp_ctrl = &exp->exp;
+		struct cif_isp10_img_src_ext_ctrl *exp_ctrl = exp->exp;
 		struct cif_isp10_img_src_data *new_data;
 
 		if (dev->img_src)
@@ -5460,35 +5106,11 @@ static void cif_isp10_vs_work(struct work_struct *work)
 			new_data = &dev->img_src_exps.data[1];
 
 		mutex_lock(&dev->img_src_exps.mutex);
-		if (exp_ctrl->ctrls->id == V4L2_CID_EXPOSURE)
-			v_frame_id = dev->isp_dev.frame_id +
-				dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_T_INDEX];
-		else
-			v_frame_id = dev->isp_dev.frame_id +
-				dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_G_INDEX];
-
-		if (v_frame_id == dev->img_src_exps.data[0].v_frame_id)
-			new_data = &dev->img_src_exps.data[0];
-		if (v_frame_id == dev->img_src_exps.data[1].v_frame_id)
-			new_data = &dev->img_src_exps.data[1];
-		new_data->v_frame_id = v_frame_id;
-
+		new_data->v_frame_id = dev->isp_dev.frame_id +
+			dev->img_src_exps.exp_valid_frms;
 		cif_isp10_img_src_ioctl(dev->img_src,
 			RK_VIDIOC_SENSOR_MODE_DATA,
 			&new_data->data);
-		new_data->data.isp_input_width =
-			dev->config.isp_config.input->defrect.width;
-		new_data->data.isp_input_height =
-			dev->config.isp_config.input->defrect.height;
-		new_data->data.isp_input_horizontal_start =
-			dev->config.isp_config.input->defrect.left;
-		new_data->data.isp_input_vertical_start =
-			dev->config.isp_config.input->defrect.top;
-
-		new_data->data.isp_output_width =
-			dev->config.isp_config.output.width;
-		new_data->data.isp_output_height =
-			dev->config.isp_config.output.height;
 		mutex_unlock(&dev->img_src_exps.mutex);
 
 		/*
@@ -5500,8 +5122,10 @@ static void cif_isp10_vs_work(struct work_struct *work)
 		 * new_data->v_frame_id);
 		 */
 
-		kfree(exp->exp.ctrls);
-		exp->exp.ctrls = NULL;
+		kfree(exp->exp->ctrls);
+		exp->exp->ctrls = NULL;
+		kfree(exp->exp);
+		exp->exp = NULL;
 		kfree(exp);
 		exp = NULL;
 		break;
@@ -5512,38 +5136,6 @@ static void cif_isp10_vs_work(struct work_struct *work)
 
 	kfree(vs_wk);
 	vs_wk = NULL;
-}
-
-static int cif_isp10_vs_work_cmd(
-	struct cif_isp10_device *dev,
-	enum cif_isp10_isp_vs_cmd cmd,
-	void *para)
-{
-	struct cif_isp10_isp_vs_work *vs_wk;
-
-	if (cmd == CIF_ISP10_VS_EXP)
-		vs_wk = kmalloc(sizeof(struct cif_isp10_isp_vs_work),
-			GFP_ATOMIC);
-	else
-		vs_wk = kmalloc(sizeof(struct cif_isp10_isp_vs_work),
-			GFP_KERNEL);
-
-	if (vs_wk) {
-		vs_wk->cmd = cmd;
-		vs_wk->dev = dev;
-		vs_wk->param = (void *)para;
-		INIT_WORK((struct work_struct *)&vs_wk->work,
-			cif_isp10_vs_work);
-		if (!queue_work(dev->vs_wq,
-			(struct work_struct *)&vs_wk->work)) {
-			cif_isp10_pltfrm_pr_err(dev->dev,
-				"%s: queue work failed\n", __func__);
-			kfree(vs_wk);
-		}
-		return 0;
-	} else {
-		return -ENOMEM;
-	}
 }
 
 /* Public Functions */
@@ -5689,7 +5281,6 @@ int cif_isp10_streamoff(
 	bool streamoff_mp = stream_ids & CIF_ISP10_STREAM_MP;
 	bool streamoff_dma = stream_ids & CIF_ISP10_STREAM_DMA;
 	unsigned int streamoff_all = 0;
-	unsigned long lock_flags;
 
 	cif_isp10_pltfrm_pr_dbg(dev->dev,
 		"SP state = %s, MP state = %s, DMA state = %s, streamoff SP = %d, streamoff MP = %d, streamoff DMA = %d\n",
@@ -5722,27 +5313,37 @@ int cif_isp10_streamoff(
 	} else {
 		streamoff_all |= CIF_ISP10_STREAM_MP;
 	}
-	if (streamoff_all == (CIF_ISP10_STREAM_MP | CIF_ISP10_STREAM_SP)) {
-		struct cif_isp10_img_src_exp *exp;
-		spin_lock_irqsave(&dev->img_src_exps.lock, lock_flags);
-		if (!list_empty(&dev->img_src_exps.list)) {
-			exp = list_first_entry(&dev->img_src_exps.list,
-				struct cif_isp10_img_src_exp,
-				list);
-			list_del(&exp->list);
-			kfree(exp->exp.ctrls);
-			kfree(exp);
-		}
-		spin_unlock_irqrestore(&dev->img_src_exps.lock, lock_flags);
+	if (streamoff_all == (CIF_ISP10_STREAM_MP | CIF_ISP10_STREAM_SP))
 		drain_workqueue(dev->vs_wq);
-	}
 
 	ret = cif_isp10_stop(dev, streamoff_sp, streamoff_mp);
 	if (IS_ERR_VALUE(ret))
 		goto err;
-
-	if (streamoff_dma)
+	if ((streamoff_sp) &&
+		(dev->sp_stream.state == CIF_ISP10_STATE_READY))
+		dev->sp_stream.state = CIF_ISP10_STATE_INACTIVE;
+	if (streamoff_mp) {
+		dev->config.jpeg_config.enable = false;
+		dev->config.mi_config.raw_enable = false;
+		dev->config.mi_config.mp.output.width = 0;
+		dev->config.mi_config.mp.output.height = 0;
+		dev->config.mi_config.mp.output.pix_fmt =
+			CIF_UNKNOWN_FORMAT;
+		if (dev->mp_stream.state == CIF_ISP10_STATE_READY)
+			dev->mp_stream.state = CIF_ISP10_STATE_INACTIVE;
+	}
+	if (streamoff_dma) {
 		cif_isp10_stop_dma(dev);
+		if (dev->dma_stream.state == CIF_ISP10_STATE_READY)
+			dev->dma_stream.state = CIF_ISP10_STATE_INACTIVE;
+	}
+	if ((dev->dma_stream.state <= CIF_ISP10_STATE_INACTIVE) &&
+		(dev->mp_stream.state <= CIF_ISP10_STATE_INACTIVE) &&
+		(dev->sp_stream.state <= CIF_ISP10_STATE_INACTIVE)) {
+		dev->isp_dev.input_width = 0;
+		dev->isp_dev.input_height = 0;
+		dev->config.isp_config.ism_config.ism_en = false;
+	}
 
 	cif_isp10_pltfrm_pr_dbg(dev->dev,
 		"SP state = %s, MP state = %s, DMA state = %s, # frames received = %d\n",
@@ -5885,16 +5486,10 @@ int cif_isp10_init(
 	/* set default input, failure is not fatal here */
 	if ((dev->sp_stream.state == CIF_ISP10_STATE_DISABLED) &&
 		(dev->mp_stream.state == CIF_ISP10_STATE_DISABLED)) {
-		ret = cif_isp10_s_input(dev, 0);
-		if (IS_ERR_VALUE(ret))
-			goto err;
-
+		(void)cif_isp10_s_input(dev, 0);
 		dev->config.isp_config.si_enable = false;
 		dev->config.isp_config.ie_config.effect =
 			CIF_ISP10_IE_NONE;
-
-		memset(&dev->config.isp_config.output, 0,
-			sizeof(dev->config.isp_config.output));
 	}
 
 	if (stream_ids & CIF_ISP10_STREAM_SP)
@@ -5916,8 +5511,6 @@ int cif_isp10_release(
 	int stream_ids)
 {
 	int ret;
-	unsigned char *meta_addr = NULL;
-	unsigned long flags = 0;
 	struct cif_isp10_stream *strm_dev;
 
 	cif_isp10_pltfrm_pr_dbg(NULL, "0x%08x\n", stream_ids);
@@ -5943,15 +5536,11 @@ int cif_isp10_release(
 		strm_dev = NULL;
 
 	if (strm_dev) {
-		spin_lock_irqsave(&strm_dev->metadata.spinlock, flags);
 		if (strm_dev->metadata.d) {
-			meta_addr = strm_dev->metadata.d;
+			vfree(strm_dev->metadata.d);
 			strm_dev->metadata.d = NULL;
 			strm_dev->metadata.cnt = 0;
 		}
-		spin_unlock_irqrestore(&strm_dev->metadata.spinlock, flags);
-		if (meta_addr)
-			vfree(meta_addr);
 	}
 
 	if (stream_ids & CIF_ISP10_STREAM_SP) {
@@ -6056,8 +5645,7 @@ struct cif_isp10_device *cif_isp10_create(
 	cif_isp10_pltfrm_event_init(dev->dev, &dev->sp_stream.done);
 	cif_isp10_pltfrm_event_init(dev->dev, &dev->mp_stream.done);
 
-	dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_T_INDEX] = 4;
-	dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_G_INDEX] = 4;
+	dev->img_src_exps.exp_valid_frms = 2;
 	mutex_init(&dev->img_src_exps.mutex);
 	memset(&dev->img_src_exps.data, 0x00, sizeof(dev->img_src_exps.data));
 	spin_lock_init(&dev->img_src_exps.lock);
@@ -6083,22 +5671,6 @@ void cif_isp10_destroy(
 	cif_isp10_pltfrm_pr_dbg(NULL, "\n");
 	if (!IS_ERR_OR_NULL(dev))
 		kfree(dev);
-}
-
-int cif_isp10_g_input(
-	struct cif_isp10_device *dev,
-	unsigned int *input)
-{
-	unsigned int i;
-
-	for (i = 0; i < dev->img_src_cnt; i++) {
-		if (dev->img_src != NULL && dev->img_src == dev->img_src_array[i]) {
-			*input = i;
-			return 0;
-		}
-	}
-
-	return -EINVAL;
 }
 
 int cif_isp10_s_input(
@@ -6182,11 +5754,9 @@ int cif_isp10_qbuf(
 	switch (stream) {
 	case CIF_ISP10_STREAM_SP:
 		list_add_tail(&buf->queue, &dev->sp_stream.buf_queue);
-		cif_isp10_update_mi_immediate(dev, CIF_ISP10_STREAM_SP);
 		break;
 	case CIF_ISP10_STREAM_MP:
 		list_add_tail(&buf->queue, &dev->mp_stream.buf_queue);
-		cif_isp10_update_mi_immediate(dev, CIF_ISP10_STREAM_MP);
 		break;
 	case CIF_ISP10_STREAM_DMA:
 		list_add_tail(&buf->queue, &dev->dma_stream.buf_queue);
@@ -6216,7 +5786,6 @@ int cif_isp10_reqbufs(
 	enum cif_isp10_stream_id strm,
 	struct v4l2_requestbuffers *req)
 {
-	unsigned long flags = 0;
 	struct cif_isp10_stream *strm_dev = NULL;
 
 	switch (strm) {
@@ -6232,9 +5801,7 @@ int cif_isp10_reqbufs(
 		break;
 	}
 
-	spin_lock_irqsave(&strm_dev->metadata.spinlock, flags);
 	strm_dev->metadata.cnt = req->count;
-	spin_unlock_irqrestore(&strm_dev->metadata.spinlock, flags);
 
 	return 0;
 }
@@ -6243,138 +5810,45 @@ int cif_isp10_s_exp(
 	struct cif_isp10_device *dev,
 	struct cif_isp10_img_src_ext_ctrl *exp_ctrl)
 {
-	struct cif_isp10_img_src_ctrl  *ctrl_exp_t = NULL, *ctrl_exp_g = NULL;
-	struct cif_isp10_img_src_exp *exp = NULL, *exp_t = NULL, *exp_g = NULL;
+	struct cif_isp10_img_src_exp *exp = NULL;
 	unsigned long lock_flags;
-	int retval, i, exp_cnt;
+	int retval;
 
 	if (!dev->vs_wq)
 		return -ENODEV;
 
-	if (dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_T_INDEX] ==
-		dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_G_INDEX]) {
-		exp = kmalloc(sizeof(struct cif_isp10_img_src_exp), GFP_KERNEL);
-		if (!exp) {
-			retval = -ENOMEM;
-			goto failed;
-		}
-		exp->exp = *exp_ctrl;
-
-		spin_lock_irqsave(&dev->img_src_exps.lock, lock_flags);
-		list_add_tail(&exp->list, &dev->img_src_exps.list);
-		spin_unlock_irqrestore(&dev->img_src_exps.lock, lock_flags);
-	} else {
-		exp_t = kmalloc(sizeof(struct cif_isp10_img_src_exp), GFP_KERNEL);
-		if (!exp_t) {
-			retval = -ENOMEM;
-			goto failed;
-		}
-		ctrl_exp_t = kmalloc(sizeof(struct cif_isp10_img_src_ctrl) * 2, GFP_KERNEL);
-		if (!ctrl_exp_t) {
-			retval = -ENOMEM;
-			goto failed;
-		}
-
-		exp_g = kmalloc(sizeof(struct cif_isp10_img_src_exp), GFP_KERNEL);
-		if (!exp_g) {
-			retval = -ENOMEM;
-			goto failed;
-		}
-		ctrl_exp_g = kmalloc(sizeof(struct cif_isp10_img_src_ctrl)*2, GFP_KERNEL);
-		if (!ctrl_exp_g) {
-			retval = -ENOMEM;
-			goto failed;
-		}
-
-		exp_cnt = 0;
-		for (i = 0; i < exp_ctrl->cnt; i++) {
-			if (exp_ctrl->ctrls[i].id == V4L2_CID_EXPOSURE) {
-				*ctrl_exp_t = exp_ctrl->ctrls[i];
-				exp_cnt++;
-			}
-			if (exp_ctrl->ctrls[i].id == RK_V4L2_CID_VTS) {
-				*(ctrl_exp_t + 1) = exp_ctrl->ctrls[i];
-				exp_cnt++;
-			}
-			if (exp_ctrl->ctrls[i].id == V4L2_CID_GAIN) {
-				*ctrl_exp_g = exp_ctrl->ctrls[i];
-			}
-			if (exp_ctrl->ctrls[i].id == RK_V4L2_CID_GAIN_PERCENT) {
-				*(ctrl_exp_g+1) = exp_ctrl->ctrls[i];
-			}
-		}
-		kfree(exp_ctrl->ctrls);
-		exp_ctrl->ctrls = NULL;
-
-		exp_t->exp.cnt = exp_cnt;
-		exp_t->exp.class = exp_ctrl->class;
-		exp_t->exp.ctrls = ctrl_exp_t;
-		exp_g->exp.cnt = 2;
-		exp_g->exp.class = exp_ctrl->class;
-		exp_g->exp.ctrls = ctrl_exp_g;
-
-		if (dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_T_INDEX] <
-			dev->img_src_exps.exp_valid_frms[VALID_FR_EXP_G_INDEX]) {
-			spin_lock_irqsave(&dev->img_src_exps.lock, lock_flags);
-			list_add_tail(&exp_g->list, &dev->img_src_exps.list);
-			list_add_tail(&exp_t->list, &dev->img_src_exps.list);
-			spin_unlock_irqrestore(&dev->img_src_exps.lock, lock_flags);
-		} else {
-			spin_lock_irqsave(&dev->img_src_exps.lock, lock_flags);
-			list_add_tail(&exp_t->list, &dev->img_src_exps.list);
-			list_add_tail(&exp_g->list, &dev->img_src_exps.list);
-			spin_unlock_irqrestore(&dev->img_src_exps.lock, lock_flags);
-		}
+	exp = kmalloc(sizeof(*exp), GFP_KERNEL);
+	if (!exp) {
+		retval = -ENOMEM;
+		goto failed;
 	}
+
+	exp->exp = exp_ctrl;
+
+	spin_lock_irqsave(&dev->img_src_exps.lock, lock_flags);
+	list_add_tail(&exp->list, &dev->img_src_exps.list);
+	spin_unlock_irqrestore(&dev->img_src_exps.lock, lock_flags);
+
 	return 0;
 
 failed:
-	if (exp) {
-		kfree(exp);
-		exp = NULL;
-	}
-	if (exp_t) {
-		kfree(exp_t);
-		exp_t = NULL;
-	}
-	if (exp_g) {
-		kfree(exp_g);
-		exp_g = NULL;
-	}
-	if (ctrl_exp_t) {
-		kfree(ctrl_exp_t);
-		ctrl_exp_t = NULL;
-	}
-	if (ctrl_exp_g) {
-		kfree(ctrl_exp_g);
-		ctrl_exp_g = NULL;
-	}
 	return retval;
 }
 
-int cif_isp10_s_vcm(
+int cif_isp10_s_isp_metadata(
 	struct cif_isp10_device *dev,
-	unsigned int id,
-	int val)
+	struct cif_isp10_isp_readout_work *readout_work,
+	struct cifisp_isp_other_cfg *new_other,
+	struct cifisp_isp_meas_cfg *new_meas,
+	struct cifisp_stat_buffer *new_stats)
 {
-	if (dev->img_src != NULL)
-		cif_isp10_img_src_ioctl(dev->img_src,
-			PLTFRM_CIFCAM_SET_VCM_POS, &val);
-	return 0;
-}
-
-int cif_isp10_s_vb_metadata(
-	struct cif_isp10_device *dev,
-	struct cif_isp10_isp_readout_work *readout_work)
-{
-	unsigned long flags = 0;
 	unsigned int stream_id =
 		readout_work->stream_id;
 	struct vb2_buffer *vb =
 		readout_work->vb;
 	struct cif_isp10_stream *strm_dev = NULL;
 	struct v4l2_buffer_metadata_s *metadata;
-	struct isp_supplemental_sensor_mode_data sensor_mode;
+	struct cifisp_isp_metadata *isp_last;
 
 	switch (stream_id) {
 	case CIF_ISP10_STREAM_MP:
@@ -6386,39 +5860,50 @@ int cif_isp10_s_vb_metadata(
 	default:
 		cif_isp10_pltfrm_pr_err(dev->dev,
 			"unknown stream id%d\n", stream_id);
-		return -1;
+		break;
 	}
 
-	if (strm_dev->state != CIF_ISP10_STATE_STREAMING) {
-		cif_isp10_pltfrm_pr_err(dev->dev,
-			"stream id%d is not streaming\n", stream_id);
-		return -1;
-	}
-
-	cif_isp10_sensor_mode_data_sync(dev,
-		readout_work->frame_id,
-		&sensor_mode);
-
-	spin_lock_irqsave(&strm_dev->metadata.spinlock, flags);
 	if (vb && strm_dev->metadata.d) {
-		if (vb->index >= strm_dev->metadata.cnt) {
-			cif_isp10_pltfrm_pr_err(dev->dev,
-				"vb->index %d is bigger than metadata.cnt %d\n",
-				vb->index, strm_dev->metadata.cnt);
-			spin_unlock_irqrestore(&strm_dev->metadata.spinlock, flags);
-			return -1;
-		}
 		metadata = (struct v4l2_buffer_metadata_s *)
 			(strm_dev->metadata.d +
 			vb->index * CAMERA_METADATA_LEN);
 
 		metadata->frame_id = readout_work->frame_id;
-		metadata->sensor.exp_time =
-			sensor_mode.exp_time;
-		metadata->sensor.gain =
-			sensor_mode.gain;
+		isp_last =
+			(struct cifisp_isp_metadata *)metadata->isp;
+
+		if (new_meas) {
+			if ((isp_last->meas_cfg.s_frame_id == 0xffffffff) ||
+				(isp_last->meas_cfg.s_frame_id <
+				new_meas->s_frame_id)) {
+				memcpy(&isp_last->meas_cfg,
+					new_meas,
+					sizeof(struct cifisp_isp_meas_cfg));
+			}
+		}
+
+		if (new_other) {
+			if ((isp_last->other_cfg.s_frame_id == 0xffffffff) ||
+				(isp_last->other_cfg.s_frame_id <
+				new_other->s_frame_id)) {
+				memcpy(&isp_last->other_cfg,
+					new_other,
+					sizeof(struct cifisp_isp_other_cfg));
+			}
+		}
+
+		if (new_stats) {
+			memcpy(&isp_last->meas_stat,
+				new_stats,
+				sizeof(struct cifisp_stat_buffer));
+			metadata->sensor.exp_time =
+				new_stats->sensor_mode.exp_time;
+			metadata->sensor.gain =
+				new_stats->sensor_mode.gain;
+		} else {
+			isp_last->meas_stat.meas_type = 0x00;
+		}
 	}
-	spin_unlock_irqrestore(&strm_dev->metadata.spinlock, flags);
 
 	if (vb) {
 		cif_isp10_pltfrm_pr_dbg(NULL,
@@ -6438,7 +5923,6 @@ int cif_isp10_mmap(
 	void *mem_vaddr;
 	int retval = 0, pages;
 	unsigned long mem_size;
-	unsigned long flags = 0;
 
 	switch (stream_id) {
 	case CIF_ISP10_STREAM_MP:
@@ -6484,9 +5968,7 @@ int cif_isp10_mmap(
 		goto done;
 	}
 
-	spin_lock_irqsave(&strm_dev->metadata.spinlock, flags);
 	strm_dev->metadata.d = (unsigned char *)mem_vaddr;
-	spin_unlock_irqrestore(&strm_dev->metadata.spinlock, flags);
 
 	vma->vm_private_data = (void *)&strm_dev->metadata;
 
@@ -6716,6 +6198,7 @@ int cif_isp10_s_ctrl(
 	case CIF_ISP10_CID_ANALOG_GAIN:
 	case CIF_ISP10_CID_EXPOSURE_TIME:
 	case CIF_ISP10_CID_BLACK_LEVEL:
+	case CIF_ISP10_CID_FOCUS_ABSOLUTE:
 	case CIF_ISP10_CID_AUTO_N_PRESET_WHITE_BALANCE:
 	case CIF_ISP10_CID_SCENE_MODE:
 	case CIF_ISP10_CID_AUTO_FPS:
@@ -6723,8 +6206,6 @@ int cif_isp10_s_ctrl(
 	case CIF_ISP10_CID_VFLIP:
 		return cif_isp10_img_src_s_ctrl(dev->img_src,
 			id, val);
-	case CIF_ISP10_CID_FOCUS_ABSOLUTE:
-		return cif_isp10_s_vcm(dev, id, val);
 	default:
 		cif_isp10_pltfrm_pr_err(dev->dev,
 			"unknown/unsupported control %d\n", id);
@@ -6885,29 +6366,14 @@ int cif_isp10_isp_isr(unsigned int isp_mis, void *cntxt)
 		cif_ioread32(dev->config.base_addr + CIF_ISP_RIS),
 		cif_ioread32(dev->config.base_addr + CIF_ISP_IMSC));
 
-	if (isp_mis & CIF_ISP_OFF) {
-		cif_iowrite32(CIF_ISP_OFF,
-				dev->config.base_addr + CIF_ISP_ICR);
-		cif_isp10_pltfrm_pr_dbg(dev->dev, "ISP Stop Interrupt!\n");
-		dev->isp_stop_flags = 1;
-		wake_up_interruptible(&dev->isp_stop_wait);
-		return 0;
-	}
-
 	if (isp_mis & CIF_ISP_V_START) {
+		struct cif_isp10_isp_vs_work *vs_wk;
 		struct cif_isp10_img_src_exp *exp;
 
 		do_gettimeofday(&tv);
 		dev->b_isp_frame_in = false;
 		dev->b_mi_frame_end = false;
 		cifisp_v_start(&dev->isp_dev, &tv);
-
-		/* BIT 2(current field information): 0 = odd, 1 = even */
-		if (PLTFRM_CAM_ITF_INTERLACE(dev->config.cam_itf.type))
-			dev->config.mi_config.sp.field_flag =
-				(cif_ioread32(dev->config.base_addr +
-				 CIF_ISP_FLAGS_SHD) & CIF_ISP_FLAGS_SHD_FIELD_INFO)
-				>> CIF_ISP_FLAGS_SHD_FIELD_BIT;
 
 		cif_iowrite32(CIF_ISP_V_START,
 		      dev->config.base_addr + CIF_ISP_ICR);
@@ -6936,8 +6402,23 @@ int cif_isp10_isp_isr(unsigned int isp_mis, void *cntxt)
 		}
 		spin_unlock(&dev->img_src_exps.lock);
 
-		if (exp)
-			cif_isp10_vs_work_cmd(dev, CIF_ISP10_VS_EXP, (void *)exp);
+		if (exp) {
+			vs_wk = kmalloc(sizeof(*vs_wk),
+				GFP_KERNEL);
+			if (vs_wk) {
+				vs_wk->cmd = CIF_ISP10_VS_EXP;
+				vs_wk->dev = dev;
+				vs_wk->param = (void *)exp;
+				INIT_WORK((struct work_struct *)&vs_wk->work,
+					cif_isp10_vs_work);
+				if (!queue_work(dev->vs_wq,
+					(struct work_struct *)&vs_wk->work)) {
+					cif_isp10_pltfrm_pr_err(dev->dev,
+					"%s: queue work failed\n", __func__);
+					kfree(vs_wk);
+				}
+			}
+		}
 	}
 
 	if (isp_mis & CIF_ISP_FRAME_IN) {
@@ -6979,18 +6460,14 @@ int cif_isp10_isp_isr(unsigned int isp_mis, void *cntxt)
 				      CIF_ISP_ICR);
 		}
 
-		spin_lock(&dev->isp_state_lock);
-		if (dev->isp_state == CIF_ISP10_STATE_RUNNING) {
-			/* Stop ISP */
-			cif_iowrite32AND(~CIF_ISP_CTRL_ISP_INFORM_ENABLE &
-					~CIF_ISP_CTRL_ISP_ENABLE,
-					dev->config.base_addr + CIF_ISP_CTRL);
-			/* isp_update */
-			cif_iowrite32OR(CIF_ISP_CTRL_ISP_CFG_UPD,
-					dev->config.base_addr + CIF_ISP_CTRL);
-			cif_isp10_hw_restart(dev);
-		}
-		spin_unlock(&dev->isp_state_lock);
+		/* Stop ISP */
+		cif_iowrite32AND(~CIF_ISP_CTRL_ISP_INFORM_ENABLE &
+				~CIF_ISP_CTRL_ISP_ENABLE,
+				dev->config.base_addr + CIF_ISP_CTRL);
+		/* isp_update */
+		cif_iowrite32OR(CIF_ISP_CTRL_ISP_CFG_UPD,
+				dev->config.base_addr + CIF_ISP_CTRL);
+		cif_isp10_hw_restart(dev);
 	}
 
 	if (isp_mis & CIF_ISP_FRAME_IN) {

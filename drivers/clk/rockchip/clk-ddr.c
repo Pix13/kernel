@@ -23,13 +23,9 @@
 #include <linux/of.h>
 #include <linux/rockchip/rockchip_sip.h>
 #include <linux/slab.h>
-#include <soc/rockchip/rockchip_dmc.h>
 #include <soc/rockchip/rockchip_sip.h>
 #include <soc/rockchip/scpi.h>
 #include <uapi/drm/drm_mode.h>
-#ifdef CONFIG_ARM
-#include <asm/psci.h>
-#endif
 
 #include "clk.h"
 
@@ -57,13 +53,14 @@ static int rk_drm_get_lcdc_type(void)
 	if (drm) {
 		struct drm_connector *conn;
 
-		list_for_each_entry(conn, &drm->mode_config.connector_list,
-				    head) {
+		drm_modeset_lock(&drm->mode_config.connection_mutex, NULL);
+		drm_for_each_connector(conn, drm) {
 			if (conn->encoder) {
 				lcdc_type = conn->connector_type;
 				break;
 			}
 		}
+		drm_modeset_unlock(&drm->mode_config.connection_mutex);
 	}
 
 	switch (lcdc_type) {
@@ -220,7 +217,6 @@ struct share_params {
 	 * 0: never wait flag1
 	 */
 	u32 wait_flag0;
-	u32 complt_hwirq;
 	 /* if need, add parameter after */
 };
 
@@ -257,14 +253,9 @@ static int rockchip_ddrclk_sip_set_rate_v2(struct clk_hw *hw,
 
 	p->hz = drate;
 	p->lcdc_type = rk_drm_get_lcdc_type();
-	p->wait_flag1 = 1;
-	p->wait_flag0 = 1;
 
 	res = sip_smc_dram(SHARE_PAGE_TYPE_DDR, 0,
 			   ROCKCHIP_SIP_CONFIG_DRAM_SET_RATE);
-
-	if ((int)res.a1 == SIP_RET_SET_RATE_TIMEOUT)
-		rockchip_dmcfreq_wait_complete();
 
 	return res.a0;
 }
@@ -311,22 +302,16 @@ static const struct clk_ops rockchip_ddrclk_sip_ops_v2 = {
 	.get_parent = rockchip_ddrclk_get_parent,
 };
 
-struct clk * __init
-rockchip_clk_register_ddrclk(const char *name, int flags,
-			     const char *const *parent_names,
-			     u8 num_parents, int mux_offset,
-			     int mux_shift, int mux_width,
-			     int div_shift, int div_width,
-			     int ddr_flag, void __iomem *reg_base)
+struct clk *rockchip_clk_register_ddrclk(const char *name, int flags,
+					 const char *const *parent_names,
+					 u8 num_parents, int mux_offset,
+					 int mux_shift, int mux_width,
+					 int div_shift, int div_width,
+					 int ddr_flag, void __iomem *reg_base)
 {
 	struct rockchip_ddrclk *ddrclk;
 	struct clk_init_data init;
 	struct clk *clk;
-
-#ifdef CONFIG_ARM
-	if (!psci_smp_available())
-		return NULL;
-#endif
 
 	ddrclk = kzalloc(sizeof(*ddrclk), GFP_KERNEL);
 	if (!ddrclk)
@@ -366,8 +351,11 @@ rockchip_clk_register_ddrclk(const char *name, int flags,
 	ddrclk->ddr_flag = ddr_flag;
 
 	clk = clk_register(NULL, &ddrclk->hw);
-	if (IS_ERR(clk))
+	if (IS_ERR(clk)) {
+		pr_err("%s: could not register ddrclk %s\n", __func__,	name);
 		kfree(ddrclk);
+		return NULL;
+	}
 
 	return clk;
 }

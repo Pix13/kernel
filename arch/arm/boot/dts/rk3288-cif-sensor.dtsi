@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: (GPL-2.0+ OR MIT)
 #include "rk3288.dtsi" 
 #include "rk3288-pinctrl.dtsi"
 #include "../../mach-rockchip/rk_camera_sensor_info.h"

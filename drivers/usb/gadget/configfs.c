@@ -301,7 +301,6 @@ static ssize_t gadget_dev_desc_UDC_store(struct config_item *item,
 		ret = unregister_gadget(gi);
 		if (ret)
 			goto err;
-		kfree(name);
 	} else {
 		if (gi->udc_name) {
 			ret = -EBUSY;
@@ -1255,9 +1254,6 @@ static void purge_configs_funcs(struct gadget_info *gi)
 						" '%s'/%p\n", f->name, f);
 				f->unbind(c, f);
 			}
-
-			if (f->bind_deactivated)
-				usb_function_activate(f);
 		}
 		c->next_interface_id = 0;
 		memset(c->interface, 0, sizeof(c->interface));
@@ -1492,8 +1488,7 @@ static int android_setup(struct usb_gadget *gadget,
 	struct usb_function_instance *fi;
 
 	spin_lock_irqsave(&cdev->lock, flags);
-	if (c->bRequest == USB_REQ_GET_DESCRIPTOR &&
-	    (c->wValue >> 8) == USB_DT_CONFIG && !gi->connected) {
+	if (!gi->connected) {
 		gi->connected = 1;
 		schedule_work(&gi->work);
 	}
@@ -1528,18 +1523,6 @@ static void android_disconnect(struct usb_gadget *gadget)
 {
 	struct usb_composite_dev        *cdev = get_gadget_data(gadget);
 	struct gadget_info *gi = container_of(cdev, struct gadget_info, cdev);
-
-	/* FIXME: There's a race between usb_gadget_udc_stop() which is likely
-	 * to set the gadget driver to NULL in the udc driver and this drivers
-	 * gadget disconnect fn which likely checks for the gadget driver to
-	 * be a null ptr. It happens that unbind (doing set_gadget_data(NULL))
-	 * is called before the gadget driver is set to NULL and the udc driver
-	 * calls disconnect fn which results in cdev being a null ptr.
-	 */
-	if (cdev == NULL) {
-		WARN(1, "%s: gadget driver already disconnected\n", __func__);
-		return;
-	}
 
 	/* accessory HID support can be active while the
 		accessory function is not actually enabled,

@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0
 # gsensor drivers
 
 obj-$(CONFIG_GS_MMA7660) 	+= mma7660.o

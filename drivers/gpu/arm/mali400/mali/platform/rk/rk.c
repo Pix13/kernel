@@ -1,10 +1,11 @@
 /*
- * (C) COPYRIGHT RockChip Limited. All rights reserved.
- *
- * This program is free software and is provided to you under the terms of the
- * GNU General Public License version 2 as published by the Free Software
- * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * This confidential and proprietary software may be used only as
+ * authorised by a licensing agreement from ARM Limited
+ * (C) COPYRIGHT 2009-2010, 2012 ARM Limited
+ * ALL RIGHTS RESERVED
+ * The entire notice above must be reproduced on all authorised
+ * copies and copies may only be made to the extent permitted
+ * by a licensing agreement from ARM Limited.
  */
 
 /**
@@ -33,9 +34,7 @@
 #include <linux/workqueue.h>
 #include <linux/dma-mapping.h>
 #include <linux/pm_runtime.h>
-#include <linux/delay.h>
 #include <linux/rockchip/cpu.h>
-#include <soc/rockchip/rockchip_opp_select.h>
 
 #include <linux/mali/mali_utgard.h>
 #include "mali_kernel_common.h"
@@ -47,8 +46,6 @@ u32 mali_group_error;
 
 /*---------------------------------------------------------------------------*/
 
-#define DEFAULT_UTILISATION_PERIOD_IN_MS (100)
-
 /*
  * rk_platform_context_of_mali_device.
  */
@@ -57,115 +54,22 @@ struct rk_context {
 	struct device *dev;
 	/* is the GPU powered on?  */
 	bool is_powered;
-	/* debug only, the period in ms to count gpu_utilisation. */
-	unsigned int utilisation_period;
 };
 
 struct rk_context *s_rk_context;
 
-/*---------------------------------------------------------------------------*/
-
-#ifdef CONFIG_MALI_DEVFREQ
-static ssize_t utilisation_period_show(struct device *dev,
-				       struct device_attribute *attr,
-				       char *buf)
-{
-	struct rk_context *platform = s_rk_context;
-	ssize_t ret = 0;
-
-	ret += snprintf(buf, PAGE_SIZE, "%u\n", platform->utilisation_period);
-
-	return ret;
-}
-
-static ssize_t utilisation_period_store(struct device *dev,
-					struct device_attribute *attr,
-					const char *buf,
-					size_t count)
-{
-	struct rk_context *platform = s_rk_context;
-	int ret = 0;
-
-	ret = kstrtouint(buf, 0, &platform->utilisation_period);
-	if (ret) {
-		E("invalid input period : %s.", buf);
-		return ret;
-	}
-	D("set utilisation_period to '%d'.", platform->utilisation_period);
-
-	return count;
-}
-
-static ssize_t utilisation_show(struct device *dev,
-				struct device_attribute *attr,
-				char *buf)
-{
-	struct rk_context *platform = s_rk_context;
-	struct mali_device *mdev = dev_get_drvdata(dev);
-	ssize_t ret = 0;
-	unsigned long period_in_us = platform->utilisation_period * 1000;
-	unsigned long total_time;
-	unsigned long busy_time;
-	unsigned long utilisation;
-
-	mali_pm_reset_dvfs_utilisation(mdev);
-	usleep_range(period_in_us, period_in_us + 100);
-	mali_pm_get_dvfs_utilisation(mdev, &total_time, &busy_time);
-
-	/* 'devfreq_dev_profile' instance registered to devfreq
-	 * also uses mali_pm_reset_dvfs_utilisation()
-	 * and mali_pm_get_dvfs_utilisation().
-	 * So, it's better to disable GPU DVFS before reading this node.
-	 */
-	D("total_time : %lu, busy_time : %lu.", total_time, busy_time);
-
-	utilisation = busy_time / (total_time / 100);
-	ret += snprintf(buf, PAGE_SIZE, "%lu\n", utilisation);
-
-	return ret;
-}
-
-static DEVICE_ATTR_RW(utilisation_period);
-static DEVICE_ATTR_RO(utilisation);
-#endif
+/*-------------------------------------------------------*/
 
 static int rk_context_create_sysfs_files(struct device *dev)
 {
-#ifdef CONFIG_MALI_DEVFREQ
-	int ret;
+	int ret = 0;
 
-	ret = device_create_file(dev, &dev_attr_utilisation_period);
-	if (ret) {
-		E("fail to create sysfs file 'utilisation_period'.");
-		goto out;
-	}
-
-	ret = device_create_file(dev, &dev_attr_utilisation);
-	if (ret) {
-		E("fail to create sysfs file 'utilisation'.");
-		goto remove_utilisation_period;
-	}
-
-	return 0;
-
-remove_utilisation_period:
-	device_remove_file(dev, &dev_attr_utilisation_period);
-out:
 	return ret;
-#else
-	return 0;
-#endif
 }
 
 static void rk_context_remove_sysfs_files(struct device *dev)
 {
-#ifdef CONFIG_MALI_DEVFREQ
-	device_remove_file(dev, &dev_attr_utilisation_period);
-	device_remove_file(dev, &dev_attr_utilisation);
-#endif
 }
-
-/*---------------------------------------------------------------------------*/
 
 /*
  * Init rk_platform_context of mali_device.
@@ -184,8 +88,6 @@ static int rk_context_init(struct platform_device *pdev)
 
 	platform->dev = dev;
 	platform->is_powered = false;
-
-	platform->utilisation_period = DEFAULT_UTILISATION_PERIOD_IN_MS;
 
 	ret = rk_context_create_sysfs_files(dev);
 	if (ret) {
@@ -301,8 +203,7 @@ static int power_model_simple_init(struct platform_device *pdev)
 }
 
 /* Calculate gpu static power example for reference */
-static unsigned long rk_model_static_power(struct devfreq *devfreq,
-					   unsigned long voltage)
+static unsigned long rk_model_static_power(unsigned long voltage)
 {
 	int temperature, temp;
 	int temp_squared, temp_cubed, temp_scaling_factor;
@@ -341,8 +242,7 @@ static unsigned long rk_model_static_power(struct devfreq *devfreq,
 }
 
 /* Calculate gpu dynamic power example for reference */
-static unsigned long rk_model_dynamic_power(struct devfreq *devfreq,
-					    unsigned long freq,
+static unsigned long rk_model_dynamic_power(unsigned long freq,
 					    unsigned long voltage)
 {
 	/* The inputs: freq (f) is in Hz, and voltage (v) in mV.
@@ -445,11 +345,6 @@ static void rk_platform_power_off_gpu(struct device *dev)
 	rk_platform_disable_gpu_regulator(dev);
 }
 
-int rk_platform_init_opp_table(struct device *dev)
-{
-	return rockchip_init_opp_table(dev, NULL, "gpu_leakage", "mali");
-}
-
 static int mali_runtime_suspend(struct device *device)
 {
 	int ret = 0;
@@ -463,8 +358,7 @@ static int mali_runtime_suspend(struct device *device)
 		ret = device->driver->pm->runtime_suspend(device);
 	}
 
-	if (!ret)
-		rk_platform_power_off_gpu(device);
+	rk_platform_power_off_gpu(device);
 
 	return ret;
 }
@@ -502,6 +396,8 @@ static int mali_runtime_idle(struct device *device)
 			return ret;
 	}
 
+	pm_runtime_suspend(device);
+
 	return 0;
 }
 #endif
@@ -519,8 +415,7 @@ static int mali_os_suspend(struct device *device)
 		ret = device->driver->pm->suspend(device);
 	}
 
-	if (!ret)
-		rk_platform_power_off_gpu(device);
+	rk_platform_power_off_gpu(device);
 
 	return ret;
 }
@@ -636,9 +531,6 @@ int mali_platform_device_init(struct platform_device *pdev)
 	}
 
 #if defined(CONFIG_MALI_DEVFREQ) && defined(CONFIG_DEVFREQ_THERMAL)
-	if (of_machine_is_compatible("rockchip,rk3036"))
-		return 0;
-
 	err = power_model_simple_init(pdev);
 	if (err) {
 		E("fail to init simple_power_model, err : %d.", err);

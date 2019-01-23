@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #include <linux/videodev2.h>
 #include <linux/slab.h>
 #include <linux/i2c.h>

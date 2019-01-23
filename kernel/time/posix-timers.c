@@ -506,23 +506,20 @@ static enum hrtimer_restart posix_timer_fn(struct hrtimer *timer)
 static struct pid *good_sigevent(sigevent_t * event)
 {
 	struct task_struct *rtn = current->group_leader;
+	int sig = event->sigev_signo;
 
-	switch (event->sigev_notify) {
-	case SIGEV_SIGNAL | SIGEV_THREAD_ID:
-		rtn = find_task_by_vpid(event->sigev_notify_thread_id);
-		if (!rtn || !same_thread_group(rtn, current))
-			return NULL;
-		/* FALLTHRU */
-	case SIGEV_SIGNAL:
-	case SIGEV_THREAD:
-		if (event->sigev_signo <= 0 || event->sigev_signo > SIGRTMAX)
-			return NULL;
-		/* FALLTHRU */
-	case SIGEV_NONE:
-		return task_pid(rtn);
-	default:
+	if ((event->sigev_notify & SIGEV_THREAD_ID ) &&
+		(!(rtn = find_task_by_vpid(event->sigev_notify_thread_id)) ||
+		 !same_thread_group(rtn, current) ||
+		 (event->sigev_notify & ~SIGEV_THREAD_ID) != SIGEV_SIGNAL))
 		return NULL;
-	}
+
+	if (((event->sigev_notify & ~SIGEV_THREAD_ID) != SIGEV_NONE) &&
+	    (sig <= 0 || sig > SIGRTMAX || sig_kernel_only(sig) ||
+	     sig_kernel_coredump(sig)))
+		return NULL;
+
+	return task_pid(rtn);
 }
 
 void posix_timers_register_clock(const clockid_t clock_id,
@@ -750,7 +747,8 @@ common_timer_get(struct k_itimer *timr, struct itimerspec *cur_setting)
 	/* interval timer ? */
 	if (iv.tv64)
 		cur_setting->it_interval = ktime_to_timespec(iv);
-	else if (!hrtimer_active(timer) && timr->it_sigev_notify != SIGEV_NONE)
+	else if (!hrtimer_active(timer) &&
+		 (timr->it_sigev_notify & ~SIGEV_THREAD_ID) != SIGEV_NONE)
 		return;
 
 	now = timer->base->get_time();
@@ -761,7 +759,7 @@ common_timer_get(struct k_itimer *timr, struct itimerspec *cur_setting)
 	 * expiry is > now.
 	 */
 	if (iv.tv64 && (timr->it_requeue_pending & REQUEUE_PENDING ||
-			timr->it_sigev_notify == SIGEV_NONE))
+	    (timr->it_sigev_notify & ~SIGEV_THREAD_ID) == SIGEV_NONE))
 		timr->it_overrun += (unsigned int) hrtimer_forward(timer, now, iv);
 
 	remaining = __hrtimer_expires_remaining_adjusted(timer, now);
@@ -771,7 +769,7 @@ common_timer_get(struct k_itimer *timr, struct itimerspec *cur_setting)
 		 * A single shot SIGEV_NONE timer must return 0, when
 		 * it is expired !
 		 */
-		if (timr->it_sigev_notify != SIGEV_NONE)
+		if ((timr->it_sigev_notify & ~SIGEV_THREAD_ID) != SIGEV_NONE)
 			cur_setting->it_value.tv_nsec = 1;
 	} else
 		cur_setting->it_value = ktime_to_timespec(remaining);
@@ -830,6 +828,20 @@ SYSCALL_DEFINE1(timer_getoverrun, timer_t, timer_id)
 	return overrun;
 }
 
+/*
+ * Protected by RCU!
+ */
+static void timer_wait_for_callback(struct k_clock *kc, struct k_itimer *timr)
+{
+#ifdef CONFIG_PREEMPT_RT_FULL
+	if (kc->timer_set == common_timer_set)
+		hrtimer_wait_for_timer(&timr->it.real.timer);
+	else
+		/* FIXME: Whacky hack for posix-cpu-timers */
+		schedule_timeout(1);
+#endif
+}
+
 /* Set a POSIX.1b interval timer. */
 /* timr->it_lock is taken. */
 static int
@@ -869,7 +881,7 @@ common_timer_set(struct k_itimer *timr, int flags,
 	timr->it.real.interval = timespec_to_ktime(new_setting->it_interval);
 
 	/* SIGEV_NONE timers are not queued ! See common_timer_get */
-	if (timr->it_sigev_notify == SIGEV_NONE) {
+	if (((timr->it_sigev_notify & ~SIGEV_THREAD_ID) == SIGEV_NONE)) {
 		/* Setup correct expiry time for relative timers */
 		if (mode == HRTIMER_MODE_REL) {
 			hrtimer_add_expires(timer, timer->base->get_time());
@@ -907,6 +919,7 @@ retry:
 	if (!timr)
 		return -EINVAL;
 
+	rcu_read_lock();
 	kc = clockid_to_kclock(timr->it_clock);
 	if (WARN_ON_ONCE(!kc || !kc->timer_set))
 		error = -EINVAL;
@@ -915,9 +928,12 @@ retry:
 
 	unlock_timer(timr, flag);
 	if (error == TIMER_RETRY) {
+		timer_wait_for_callback(kc, timr);
 		rtn = NULL;	// We already got the old time...
+		rcu_read_unlock();
 		goto retry;
 	}
+	rcu_read_unlock();
 
 	if (old_setting && !error &&
 	    copy_to_user(old_setting, &old_spec, sizeof (old_spec)))
@@ -955,10 +971,15 @@ retry_delete:
 	if (!timer)
 		return -EINVAL;
 
+	rcu_read_lock();
 	if (timer_delete_hook(timer) == TIMER_RETRY) {
 		unlock_timer(timer, flags);
+		timer_wait_for_callback(clockid_to_kclock(timer->it_clock),
+					timer);
+		rcu_read_unlock();
 		goto retry_delete;
 	}
+	rcu_read_unlock();
 
 	spin_lock(&current->sighand->siglock);
 	list_del(&timer->list);
@@ -984,8 +1005,18 @@ static void itimer_delete(struct k_itimer *timer)
 retry_delete:
 	spin_lock_irqsave(&timer->it_lock, flags);
 
-	if (timer_delete_hook(timer) == TIMER_RETRY) {
+	/* On RT we can race with a deletion */
+	if (!timer->it_signal) {
 		unlock_timer(timer, flags);
+		return;
+	}
+
+	if (timer_delete_hook(timer) == TIMER_RETRY) {
+		rcu_read_lock();
+		unlock_timer(timer, flags);
+		timer_wait_for_callback(clockid_to_kclock(timer->it_clock),
+					timer);
+		rcu_read_unlock();
 		goto retry_delete;
 	}
 	list_del(&timer->list);

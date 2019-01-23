@@ -21,6 +21,7 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/rockchip/cpu.h>
+#include <linux/rockchip/iomap.h>
 #include <linux/rockchip/grf.h>
 #include <linux/string.h>
 #include <linux/slab.h>
@@ -91,7 +92,6 @@ static int rk32_edp_pre_init(struct rk32_edp *edp)
 	u32 val;
 
 	if (cpu_is_rk3288()) {
-#if 0
 		val = GRF_EDP_REF_CLK_SEL_INTER |
 			(GRF_EDP_REF_CLK_SEL_INTER << 16);
 		writel_relaxed(val, RK_GRF_VIRT + RK3288_GRF_SOC_CON12);
@@ -104,7 +104,6 @@ static int rk32_edp_pre_init(struct rk32_edp *edp)
 		writel_relaxed(val, RK_CRU_VIRT + 0x01d0);
 		dsb(sy);
 		udelay(1);
-#endif
 	} else {
 		/* The rk3368 reset the edp 24M clock and apb bus
 		 * according to the CRU_SOFTRST6_CON and CRU_SOFTRST7_CON.
@@ -133,13 +132,11 @@ static int rk32_edp_init_edp(struct rk32_edp *edp)
 	rk_fb_get_prmry_screen(screen);
 
 	if (cpu_is_rk3288()) {
-#if 0
 		if (screen->lcdc_id == 1)  /*select lcdc*/
 			val = EDP_SEL_VOP_LIT | (EDP_SEL_VOP_LIT << 16);
 		else
 			val = EDP_SEL_VOP_LIT << 16;
 		writel_relaxed(val, RK_GRF_VIRT + RK3288_GRF_SOC_CON6);
-#endif
 	}
 
 	if (edp->soctype == SOC_RK3399) {

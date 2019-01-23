@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0 */
+
 #include <osl.h>
 #include <dhd_linux.h>
 #include <linux/gpio.h>
@@ -26,7 +26,7 @@ static int gpio_wl_host_wake = -1; // WL_HOST_WAKE is output pin of WLAN module
 #endif
 
 static int
-dhd_wlan_set_power(int on
+dhd_wlan_set_power(bool on
 #ifdef BUS_POWER_RESTORE
 , wifi_adapter_info_t *adapter
 #endif /* BUS_POWER_RESTORE */
@@ -65,8 +65,6 @@ dhd_wlan_set_power(int on
 		}
 #endif /* BCMPCIE */
 #endif /* BUS_POWER_RESTORE */
-		/* Lets customer power to get stable */
-		mdelay(100);
 	} else {
 #if defined(BUS_POWER_RESTORE)
 #if defined(BCMSDIO)
@@ -104,7 +102,7 @@ static int dhd_wlan_set_reset(int onoff)
 	return 0;
 }
 
-static int dhd_wlan_set_carddetect(int present)
+static int dhd_wlan_set_carddetect(bool present)
 {
 	int err = 0;
 
@@ -147,10 +145,10 @@ static int dhd_wlan_get_mac_addr(unsigned char *buf)
 		bcopy((char *)&ea_example, buf, sizeof(struct ether_addr));
 	}
 #endif /* EXAMPLE_GET_MAC */
-	err = rockchip_wifi_mac_addr(buf);
 #ifdef EXAMPLE_GET_MAC_VER2
 	/* EXAMPLE code */
 	{
+		char mac[6] = {0x00,0x11,0x22,0x33,0x44,0xFF};
 		char macpad[56]= {
 		0x00,0xaa,0x9c,0x84,0xc7,0xbc,0x9b,0xf6,
 		0x02,0x33,0xa9,0x4d,0x5c,0xb4,0x0a,0x5d,
@@ -159,27 +157,33 @@ static int dhd_wlan_get_mac_addr(unsigned char *buf)
 		0x4a,0xeb,0xf6,0xe6,0x3c,0xe7,0x5f,0xfc,
 		0x0e,0xa7,0xb3,0x0f,0x00,0xe4,0x4a,0xaf,
 		0x87,0x08,0x16,0x6d,0x3a,0xe3,0xc7,0x80};
+		bcopy(mac, buf, sizeof(mac));
 		bcopy(macpad, buf+6, sizeof(macpad));
 	}
 #endif /* EXAMPLE_GET_MAC_VER2 */
+	err = rockchip_wifi_mac_addr(buf);
 
 	return err;
 }
 
+#if !defined(WL_WIRELESS_EXT)
+struct cntry_locales_custom {
+	char iso_abbrev[WLC_CNTRY_BUF_SZ];	/* ISO 3166-1 country abbreviation */
+	char custom_locale[WLC_CNTRY_BUF_SZ];	/* Custom firmware locale */
+	int32 custom_locale_rev;		/* Custom local revisin default -1 */
+};
+#endif
+
 static struct cntry_locales_custom brcm_wlan_translate_custom_table[] = {
 	/* Table should be filled out based on custom platform regulatory requirement */
-#ifdef EXAMPLE_TABLE
 	{"",   "XT", 49},  /* Universal if Country code is unknown or empty */
 	{"US", "US", 0},
-#endif /* EXMAPLE_TABLE */
 };
 
 #ifdef CUSTOM_FORCE_NODFS_FLAG
 struct cntry_locales_custom brcm_wlan_translate_nodfs_table[] = {
-#ifdef EXAMPLE_TABLE
 	{"",   "XT", 50},  /* Universal if Country code is unknown or empty */
 	{"US", "US", 0},
-#endif /* EXMAPLE_TABLE */
 };
 #endif
 
@@ -241,7 +245,6 @@ int dhd_wlan_init_gpio(void)
 #ifdef CUSTOMER_OOB
 	int host_oob_irq = -1;
 	uint host_oob_irq_flags = 0;
-	int irq_flags = -1;
 #endif
 
 	/* Please check your schematic and fill right GPIO number which connected to
@@ -252,57 +255,53 @@ int dhd_wlan_init_gpio(void)
 	gpio_wl_host_wake = -1;
 #endif
 
+	printf("%s: GPIO(WL_REG_ON) = %d\n", __FUNCTION__, gpio_wl_reg_on);
 	if (gpio_wl_reg_on >= 0) {
 		err = gpio_request(gpio_wl_reg_on, "WL_REG_ON");
 		if (err < 0) {
-			printf("%s: gpio_request(%d) for WL_REG_ON failed\n",
+			printf("%s: Faiiled to request gpio %d for WL_REG_ON\n",
 				__FUNCTION__, gpio_wl_reg_on);
 			gpio_wl_reg_on = -1;
 		}
 	}
 
 #ifdef CUSTOMER_OOB
+	printf("%s: GPIO(WL_HOST_WAKE) = %d\n", __FUNCTION__, gpio_wl_host_wake);
 	if (gpio_wl_host_wake >= 0) {
 		err = gpio_request(gpio_wl_host_wake, "bcmdhd");
 		if (err < 0) {
-			printf("%s: gpio_request(%d) for WL_HOST_WAKE failed\n",
-				__FUNCTION__, gpio_wl_host_wake);
+			printf("%s: gpio_request failed\n", __FUNCTION__);
 			return -1;
 		}
 		err = gpio_direction_input(gpio_wl_host_wake);
 		if (err < 0) {
-			printf("%s: gpio_direction_input(%d) for WL_HOST_WAKE failed\n",
-				__FUNCTION__, gpio_wl_host_wake);
+			printf("%s: gpio_direction_input failed\n", __FUNCTION__);
 			gpio_free(gpio_wl_host_wake);
 			return -1;
 		}
 		host_oob_irq = gpio_to_irq(gpio_wl_host_wake);
 		if (host_oob_irq < 0) {
-			printf("%s: gpio_to_irq(%d) for WL_HOST_WAKE failed\n",
-				__FUNCTION__, gpio_wl_host_wake);
+			printf("%s: gpio_to_irq failed\n", __FUNCTION__);
 			gpio_free(gpio_wl_host_wake);
 			return -1;
 		}
 	}
 	host_oob_irq = rockchip_wifi_get_oob_irq();
+	printf("%s: host_oob_irq: %d\n", __FUNCTION__, host_oob_irq);
 
 #ifdef HW_OOB
-	host_oob_irq_flags = IORESOURCE_IRQ | IORESOURCE_IRQ_SHAREABLE;
-	irq_flags = rockchip_wifi_get_oob_irq_flag();
-	if (irq_flags == 1)
-		host_oob_irq_flags |= IORESOURCE_IRQ_HIGHLEVEL;
-	else if (irq_flags == 0)
-		host_oob_irq_flags |= IORESOURCE_IRQ_LOWLEVEL;
-	else
-		pr_warn("%s: unknown oob irqflags !\n", __func__);
+#ifdef HW_OOB_LOW_LEVEL
+	host_oob_irq_flags = IORESOURCE_IRQ | IORESOURCE_IRQ_LOWLEVEL | IORESOURCE_IRQ_SHAREABLE;
+#else
+	host_oob_irq_flags = IORESOURCE_IRQ | IORESOURCE_IRQ_HIGHLEVEL | IORESOURCE_IRQ_SHAREABLE;
+#endif
 #else
 	host_oob_irq_flags = IORESOURCE_IRQ | IORESOURCE_IRQ_HIGHEDGE | IORESOURCE_IRQ_SHAREABLE;
 #endif
 
 	dhd_wlan_resources[0].start = dhd_wlan_resources[0].end = host_oob_irq;
 	dhd_wlan_resources[0].flags = host_oob_irq_flags;
-	printf("%s: WL_REG_ON=%d, WL_HOST_WAKE=%d\n", __FUNCTION__, gpio_wl_reg_on, gpio_wl_host_wake);
-	printf("%s: oob_irq=%d, oob_irq_flags=0x%x\n", __FUNCTION__, host_oob_irq, host_oob_irq_flags);
+	printf("%s: host_oob_irq_flags=0x%x\n", __FUNCTION__, host_oob_irq_flags);
 #endif /* CUSTOMER_OOB */
 
 	return 0;

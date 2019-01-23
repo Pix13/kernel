@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 
 #ifndef __MODEM_SOUND_H__
 #define __MODEM_SOUND_H__

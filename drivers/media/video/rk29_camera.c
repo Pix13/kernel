@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #include <mach/rk29_camera.h> 
 #include <mach/iomux.h>
 

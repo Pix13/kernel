@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef RK_VOPLITE_H_
 #define RK_VOPLITE_H_
 

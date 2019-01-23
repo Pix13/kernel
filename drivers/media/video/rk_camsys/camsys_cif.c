@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #include "camsys_cif.h"
 
 static const char miscdev_cif0_name[] = CAMSYS_CIF0_DEVNAME;

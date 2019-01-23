@@ -350,8 +350,8 @@ static void async_completion(struct nvme_queue *nvmeq, void *ctx,
 	struct async_cmd_info *cmdinfo = ctx;
 	cmdinfo->result = le32_to_cpup(&cqe->result);
 	cmdinfo->status = le16_to_cpup(&cqe->status) >> 1;
-	blk_mq_free_request(cmdinfo->req);
 	queue_kthread_work(cmdinfo->worker, &cmdinfo->work);
+	blk_mq_free_request(cmdinfo->req);
 }
 
 static inline struct nvme_cmd_info *get_cmd_from_tag(struct nvme_queue *nvmeq,
@@ -1583,26 +1583,23 @@ static int nvme_create_queue(struct nvme_queue *nvmeq, int qid)
 	nvmeq->cq_vector = qid - 1;
 	result = adapter_alloc_cq(dev, qid, nvmeq);
 	if (result < 0)
-		goto release_vector;
+		return result;
 
 	result = adapter_alloc_sq(dev, qid, nvmeq);
 	if (result < 0)
 		goto release_cq;
 
-	nvme_init_queue(nvmeq, qid);
 	result = queue_request_irq(dev, nvmeq, nvmeq->irqname);
 	if (result < 0)
 		goto release_sq;
 
+	nvme_init_queue(nvmeq, qid);
 	return result;
 
  release_sq:
-	dev->online_queues--;
 	adapter_delete_sq(dev, qid);
  release_cq:
 	adapter_delete_cq(dev, qid);
- release_vector:
-	nvmeq->cq_vector = -1;
 	return result;
 }
 
@@ -1797,7 +1794,6 @@ static int nvme_configure_admin_queue(struct nvme_dev *dev)
 		goto free_nvmeq;
 
 	nvmeq->cq_vector = 0;
-	nvme_init_queue(nvmeq, 0);
 	result = queue_request_irq(dev, nvmeq, nvmeq->irqname);
 	if (result) {
 		nvmeq->cq_vector = -1;
@@ -2299,12 +2295,11 @@ static void nvme_alloc_ns(struct nvme_dev *dev, unsigned nsid)
 	disk->queue = ns->queue;
 	disk->driverfs_dev = dev->device;
 	disk->flags = GENHD_FL_EXT_DEVT;
-
-	if (strstr(saved_command_line, "storagemedia=nvme"))
-		disk->is_rk_disk = true;
-	else
-		disk->is_rk_disk = false;
-
+#ifdef CONFIG_ARCH_ROCKCHIP
+	disk->is_rk_disk = true;
+#else
+	disk->is_rk_disk = false;
+#endif
 	sprintf(disk->disk_name, "nvme%dn%d", dev->instance, nsid);
 
 	/*
@@ -2964,7 +2959,6 @@ static void nvme_dev_shutdown(struct nvme_dev *dev)
 
 	nvme_dev_list_remove(dev);
 
-	mutex_lock(&dev->shutdown_lock);
 	if (pci_is_enabled(to_pci_dev(dev->dev))) {
 		nvme_freeze_queues(dev);
 		csts = readl(&dev->bar->csts);
@@ -2983,19 +2977,12 @@ static void nvme_dev_shutdown(struct nvme_dev *dev)
 
 	for (i = dev->queue_count - 1; i >= 0; i--)
 		nvme_clear_queue(dev->queues[i]);
-	mutex_unlock(&dev->shutdown_lock);
-}
-
-static void nvme_remove_namespaces(struct nvme_dev *dev)
-{
-	struct nvme_ns *ns, *next;
-
-	list_for_each_entry_safe(ns, next, &dev->namespaces, list)
-		nvme_ns_remove(ns);
 }
 
 static void nvme_dev_remove(struct nvme_dev *dev)
 {
+	struct nvme_ns *ns, *next;
+
 	if (nvme_io_incapable(dev)) {
 		/*
 		 * If the device is not capable of IO (surprise hot-removal,
@@ -3005,7 +2992,8 @@ static void nvme_dev_remove(struct nvme_dev *dev)
 		 */
 		nvme_dev_shutdown(dev);
 	}
-	nvme_remove_namespaces(dev);
+	list_for_each_entry_safe(ns, next, &dev->namespaces, list)
+		nvme_ns_remove(ns);
 }
 
 static int nvme_setup_prp_pools(struct nvme_dev *dev)
@@ -3172,6 +3160,7 @@ static void nvme_probe_work(struct work_struct *work)
 		goto disable;
 	}
 
+	nvme_init_queue(dev->queues[0], 0);
 	result = nvme_alloc_admin_tags(dev);
 	if (result)
 		goto disable;
@@ -3188,7 +3177,7 @@ static void nvme_probe_work(struct work_struct *work)
 	 */
 	if (dev->online_queues < 2) {
 		dev_warn(dev->dev, "IO queues not created\n");
-		nvme_remove_namespaces(dev);
+		nvme_dev_remove(dev);
 	} else {
 		nvme_unfreeze_queues(dev);
 		nvme_dev_add(dev);
@@ -3344,7 +3333,6 @@ static int nvme_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 
 	INIT_LIST_HEAD(&dev->namespaces);
 	INIT_WORK(&dev->reset_work, nvme_reset_work);
-	mutex_init(&dev->shutdown_lock);
 	dev->dev = get_device(&pdev->dev);
 	pci_set_drvdata(pdev, dev);
 

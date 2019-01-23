@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 
 #ifndef __DRIVERS_TOUCHSCREEN_AW9364_TS_H
 #define __DRIVERS_TOUCHSCREEN_AW9364_TS_H

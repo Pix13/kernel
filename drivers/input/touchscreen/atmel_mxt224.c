@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /****************************************************************************************
  * driver/input/touchscreen/atmel_mxt224.c
  *Copyright 	:ROCKCHIP  Inc

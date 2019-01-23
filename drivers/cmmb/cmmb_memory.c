@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #include "cmmb_memory.h"
 #include "cmmb_class.h"
 #include <linux/errno.h>

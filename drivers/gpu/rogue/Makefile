@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0
 include drivers/gpu/rogue/config_kernel.mk
 
 obj-$(CONFIG_POWERVR_ROGUE) += pvrsrvkm.o

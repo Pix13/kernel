@@ -17,7 +17,9 @@
 #include <linux/device.h>
 #include <linux/dma-mapping.h>
 #include <linux/list.h>
+#include <linux/mfd/syscon.h>
 #include <linux/platform_device.h>
+#include <linux/regmap.h>
 #include <linux/usb/ch9.h>
 #include <linux/usb/gadget.h>
 #include <linux/usb/atmel_usba_udc.h>
@@ -28,8 +30,6 @@
 #include <asm/gpio.h>
 
 #include "atmel_usba_udc.h"
-#define USBA_VBUS_IRQFLAGS (IRQF_ONESHOT \
-			   | IRQF_TRIGGER_FALLING | IRQF_TRIGGER_RISING)
 
 #ifdef CONFIG_USB_GADGET_DEBUG_FS
 #include <linux/debugfs.h>
@@ -1890,20 +1890,15 @@ static int atmel_usba_stop(struct usb_gadget *gadget)
 #ifdef CONFIG_OF
 static void at91sam9rl_toggle_bias(struct usba_udc *udc, int is_on)
 {
-	unsigned int uckr = at91_pmc_read(AT91_CKGR_UCKR);
-
-	if (is_on)
-		at91_pmc_write(AT91_CKGR_UCKR, uckr | AT91_PMC_BIASEN);
-	else
-		at91_pmc_write(AT91_CKGR_UCKR, uckr & ~(AT91_PMC_BIASEN));
+	regmap_update_bits(udc->pmc, AT91_CKGR_UCKR, AT91_PMC_BIASEN,
+			   is_on ? AT91_PMC_BIASEN : 0);
 }
 
 static void at91sam9g45_pulse_bias(struct usba_udc *udc)
 {
-	unsigned int uckr = at91_pmc_read(AT91_CKGR_UCKR);
-
-	at91_pmc_write(AT91_CKGR_UCKR, uckr & ~(AT91_PMC_BIASEN));
-	at91_pmc_write(AT91_CKGR_UCKR, uckr | AT91_PMC_BIASEN);
+	regmap_update_bits(udc->pmc, AT91_CKGR_UCKR, AT91_PMC_BIASEN, 0);
+	regmap_update_bits(udc->pmc, AT91_CKGR_UCKR, AT91_PMC_BIASEN,
+			   AT91_PMC_BIASEN);
 }
 
 static const struct usba_udc_errata at91sam9rl_errata = {
@@ -1940,6 +1935,9 @@ static struct usba_ep * atmel_udc_of_init(struct platform_device *pdev,
 		return ERR_PTR(-EINVAL);
 
 	udc->errata = match->data;
+	udc->pmc = syscon_regmap_lookup_by_compatible("atmel,at91sam9g45-pmc");
+	if (udc->errata && IS_ERR(udc->pmc))
+		return ERR_CAST(udc->pmc);
 
 	udc->num_ep = 0;
 
@@ -2187,7 +2185,7 @@ static int usba_udc_probe(struct platform_device *pdev)
 					IRQ_NOAUTOEN);
 			ret = devm_request_threaded_irq(&pdev->dev,
 					gpio_to_irq(udc->vbus_pin), NULL,
-					usba_vbus_irq_thread, USBA_VBUS_IRQFLAGS,
+					usba_vbus_irq_thread, IRQF_ONESHOT,
 					"atmel_usba_udc", udc);
 			if (ret) {
 				udc->vbus_pin = -ENODEV;

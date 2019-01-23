@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #include "rk_ext_fshled_ctl.h"
 #include "../camsys_gpio.h"
 #include "flashlight.h"

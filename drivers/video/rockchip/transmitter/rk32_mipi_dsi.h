@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
 drivers/video/rockchip/transmitter/rk32_mipi_dsi.h
 */

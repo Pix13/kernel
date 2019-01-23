@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 
  /****************************************************************************************
  * File:			driver/input/gsensor/lis3dh.c

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _DP_ANX9805_H_
 #define _DP_ANX9805_H_
 /**************register define  for anx9805 anx9804********/

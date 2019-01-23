@@ -127,6 +127,9 @@ void blk_rq_init(struct request_queue *q, struct request *rq)
 
 	INIT_LIST_HEAD(&rq->queuelist);
 	INIT_LIST_HEAD(&rq->timeout_list);
+#ifdef CONFIG_PREEMPT_RT_FULL
+	INIT_WORK(&rq->work, __blk_mq_complete_request_remote_work);
+#endif
 	rq->cpu = -1;
 	rq->q = q;
 	rq->__sector = (sector_t) -1;
@@ -235,7 +238,7 @@ EXPORT_SYMBOL(blk_start_queue_async);
  **/
 void blk_start_queue(struct request_queue *q)
 {
-	WARN_ON(!in_interrupt() && !irqs_disabled());
+	WARN_ON_NONRT(!irqs_disabled());
 
 	queue_flag_clear(QUEUE_FLAG_STOPPED, q);
 	__blk_run_queue(q);
@@ -528,8 +531,8 @@ void blk_set_queue_dying(struct request_queue *q)
 
 		blk_queue_for_each_rl(rl, q) {
 			if (rl->rq_pool) {
-				wake_up_all(&rl->wait[BLK_RW_SYNC]);
-				wake_up_all(&rl->wait[BLK_RW_ASYNC]);
+				wake_up(&rl->wait[BLK_RW_SYNC]);
+				wake_up(&rl->wait[BLK_RW_ASYNC]);
 			}
 		}
 	}
@@ -653,17 +656,21 @@ EXPORT_SYMBOL(blk_alloc_queue);
 int blk_queue_enter(struct request_queue *q, gfp_t gfp)
 {
 	while (true) {
+		int ret;
+
 		if (percpu_ref_tryget_live(&q->q_usage_counter))
 			return 0;
 
 		if (!gfpflags_allow_blocking(gfp))
 			return -EBUSY;
 
-		wait_event(q->mq_freeze_wq,
-			   !atomic_read(&q->mq_freeze_depth) ||
-			   blk_queue_dying(q));
+		ret = swait_event_interruptible(q->mq_freeze_wq,
+				!atomic_read(&q->mq_freeze_depth) ||
+				blk_queue_dying(q));
 		if (blk_queue_dying(q))
 			return -ENODEV;
+		if (ret)
+			return ret;
 	}
 }
 
@@ -677,7 +684,7 @@ static void blk_queue_usage_counter_release(struct percpu_ref *ref)
 	struct request_queue *q =
 		container_of(ref, struct request_queue, q_usage_counter);
 
-	wake_up_all(&q->mq_freeze_wq);
+	swake_up_all(&q->mq_freeze_wq);
 }
 
 struct request_queue *blk_alloc_queue_node(gfp_t gfp_mask, int node_id)
@@ -739,7 +746,7 @@ struct request_queue *blk_alloc_queue_node(gfp_t gfp_mask, int node_id)
 	q->bypass_depth = 1;
 	__set_bit(QUEUE_FLAG_BYPASS, &q->queue_flags);
 
-	init_waitqueue_head(&q->mq_freeze_wq);
+	init_swait_queue_head(&q->mq_freeze_wq);
 
 	/*
 	 * Init percpu_ref in atomic mode so that it's faster to shutdown.
@@ -1792,16 +1799,11 @@ get_rq:
 		/*
 		 * If this is the first request added after a plug, fire
 		 * of a plug trace.
-		 *
-		 * @request_count may become stale because of schedule
-		 * out, so check plug list again.
 		 */
-		if (!request_count || list_empty(&plug->list))
+		if (!request_count)
 			trace_block_plug(q);
 		else {
-			struct request *last = list_entry_rq(plug->list.prev);
-			if (request_count >= BLK_MAX_REQUEST_COUNT ||
-			    blk_rq_bytes(last) >= BLK_PLUG_FLUSH_SIZE) {
+			if (request_count >= BLK_MAX_REQUEST_COUNT) {
 				blk_flush_plug_list(plug, false);
 				trace_block_plug(q);
 			}
@@ -3225,7 +3227,7 @@ static void queue_unplugged(struct request_queue *q, unsigned int depth,
 		blk_run_queue_async(q);
 	else
 		__blk_run_queue(q);
-	spin_unlock(q->queue_lock);
+	spin_unlock_irq(q->queue_lock);
 }
 
 static void flush_plug_callbacks(struct blk_plug *plug, bool from_schedule)
@@ -3273,7 +3275,6 @@ EXPORT_SYMBOL(blk_check_plugged);
 void blk_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 {
 	struct request_queue *q;
-	unsigned long flags;
 	struct request *rq;
 	LIST_HEAD(list);
 	unsigned int depth;
@@ -3293,11 +3294,6 @@ void blk_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 	q = NULL;
 	depth = 0;
 
-	/*
-	 * Save and disable interrupts here, to avoid doing it for every
-	 * queue lock we have to take.
-	 */
-	local_irq_save(flags);
 	while (!list_empty(&list)) {
 		rq = list_entry_rq(list.next);
 		list_del_init(&rq->queuelist);
@@ -3310,7 +3306,7 @@ void blk_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 				queue_unplugged(q, depth, from_schedule);
 			q = rq->q;
 			depth = 0;
-			spin_lock(q->queue_lock);
+			spin_lock_irq(q->queue_lock);
 		}
 
 		/*
@@ -3337,8 +3333,6 @@ void blk_flush_plug_list(struct blk_plug *plug, bool from_schedule)
 	 */
 	if (q)
 		queue_unplugged(q, depth, from_schedule);
-
-	local_irq_restore(flags);
 }
 
 void blk_finish_plug(struct blk_plug *plug)
@@ -3575,43 +3569,76 @@ int __init blk_dev_init(void)
  * TODO : If necessary, we can make the histograms per-cpu and aggregate
  * them when printing them out.
  */
+void
+blk_zero_latency_hist(struct io_latency_state *s)
+{
+	memset(s->latency_y_axis_read, 0,
+	       sizeof(s->latency_y_axis_read));
+	memset(s->latency_y_axis_write, 0,
+	       sizeof(s->latency_y_axis_write));
+	s->latency_reads_elems = 0;
+	s->latency_writes_elems = 0;
+}
+EXPORT_SYMBOL(blk_zero_latency_hist);
+
 ssize_t
-blk_latency_hist_show(char* name, struct io_latency_state *s, char *buf,
-		int buf_size)
+blk_latency_hist_show(struct io_latency_state *s, char *buf)
 {
 	int i;
 	int bytes_written = 0;
 	u_int64_t num_elem, elem;
 	int pct;
-	u_int64_t average;
 
-       num_elem = s->latency_elems;
-       if (num_elem > 0) {
-	       average = div64_u64(s->latency_sum, s->latency_elems);
-	       bytes_written += scnprintf(buf + bytes_written,
-			       buf_size - bytes_written,
-			       "IO svc_time %s Latency Histogram (n = %llu,"
-			       " average = %llu):\n", name, num_elem, average);
-	       for (i = 0;
-		    i < ARRAY_SIZE(latency_x_axis_us);
-		    i++) {
-		       elem = s->latency_y_axis[i];
-		       pct = div64_u64(elem * 100, num_elem);
-		       bytes_written += scnprintf(buf + bytes_written,
-				       PAGE_SIZE - bytes_written,
-				       "\t< %6lluus%15llu%15d%%\n",
-				       latency_x_axis_us[i],
-				       elem, pct);
-	       }
-	       /* Last element in y-axis table is overflow */
-	       elem = s->latency_y_axis[i];
-	       pct = div64_u64(elem * 100, num_elem);
-	       bytes_written += scnprintf(buf + bytes_written,
-			       PAGE_SIZE - bytes_written,
-			       "\t>=%6lluus%15llu%15d%%\n",
-			       latency_x_axis_us[i - 1], elem, pct);
+	num_elem = s->latency_reads_elems;
+	if (num_elem > 0) {
+		bytes_written += scnprintf(buf + bytes_written,
+			   PAGE_SIZE - bytes_written,
+			   "IO svc_time Read Latency Histogram (n = %llu):\n",
+			   num_elem);
+		for (i = 0;
+		     i < ARRAY_SIZE(latency_x_axis_us);
+		     i++) {
+			elem = s->latency_y_axis_read[i];
+			pct = div64_u64(elem * 100, num_elem);
+			bytes_written += scnprintf(buf + bytes_written,
+						   PAGE_SIZE - bytes_written,
+						   "\t< %5lluus%15llu%15d%%\n",
+						   latency_x_axis_us[i],
+						   elem, pct);
+		}
+		/* Last element in y-axis table is overflow */
+		elem = s->latency_y_axis_read[i];
+		pct = div64_u64(elem * 100, num_elem);
+		bytes_written += scnprintf(buf + bytes_written,
+					   PAGE_SIZE - bytes_written,
+					   "\t> %5dms%15llu%15d%%\n", 10,
+					   elem, pct);
 	}
-
+	num_elem = s->latency_writes_elems;
+	if (num_elem > 0) {
+		bytes_written += scnprintf(buf + bytes_written,
+			   PAGE_SIZE - bytes_written,
+			   "IO svc_time Write Latency Histogram (n = %llu):\n",
+			   num_elem);
+		for (i = 0;
+		     i < ARRAY_SIZE(latency_x_axis_us);
+		     i++) {
+			elem = s->latency_y_axis_write[i];
+			pct = div64_u64(elem * 100, num_elem);
+			bytes_written += scnprintf(buf + bytes_written,
+						   PAGE_SIZE - bytes_written,
+						   "\t< %5lluus%15llu%15d%%\n",
+						   latency_x_axis_us[i],
+						   elem, pct);
+		}
+		/* Last element in y-axis table is overflow */
+		elem = s->latency_y_axis_write[i];
+		pct = div64_u64(elem * 100, num_elem);
+		bytes_written += scnprintf(buf + bytes_written,
+					   PAGE_SIZE - bytes_written,
+					   "\t> %5dms%15llu%15d%%\n", 10,
+					   elem, pct);
+	}
 	return bytes_written;
 }
 EXPORT_SYMBOL(blk_latency_hist_show);

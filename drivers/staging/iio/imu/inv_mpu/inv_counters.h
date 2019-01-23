@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * @file  inv_counters.h
  * @brief Debug file to keep track of various counters for the InvenSense

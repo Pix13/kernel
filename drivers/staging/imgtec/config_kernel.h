@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #define RGX_FW_HEAP_SHIFT  25
 #define RGX_FW_FILENAME "rgx.fw.signed"
 #define LINUX 

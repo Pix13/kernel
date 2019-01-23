@@ -125,13 +125,13 @@ extern void cleanup_module(void);
 
 /* Each module must use one module_init(). */
 #define module_init(initfn)					\
-	static inline initcall_t __maybe_unused __inittest(void)		\
+	static inline initcall_t __inittest(void)		\
 	{ return initfn; }					\
 	int init_module(void) __attribute__((alias(#initfn)));
 
 /* This is only required if you want to be unloadable. */
 #define module_exit(exitfn)					\
-	static inline exitcall_t __maybe_unused __exittest(void)		\
+	static inline exitcall_t __exittest(void)		\
 	{ return exitfn; }					\
 	void cleanup_module(void) __attribute__((alias(#exitfn)));
 
@@ -494,6 +494,7 @@ static inline int module_is_live(struct module *mod)
 struct module *__module_text_address(unsigned long addr);
 struct module *__module_address(unsigned long addr);
 bool is_module_address(unsigned long addr);
+bool __is_module_percpu_address(unsigned long addr, unsigned long *can_addr);
 bool is_module_percpu_address(unsigned long addr);
 bool is_module_text_address(unsigned long addr);
 
@@ -659,6 +660,11 @@ static inline bool is_module_percpu_address(unsigned long addr)
 	return false;
 }
 
+static inline bool __is_module_percpu_address(unsigned long addr, unsigned long *can_addr)
+{
+	return false;
+}
+
 static inline bool is_module_text_address(unsigned long addr)
 {
 	return false;
@@ -786,15 +792,6 @@ static inline void module_bug_finalize(const Elf_Ehdr *hdr,
 }
 static inline void module_bug_cleanup(struct module *mod) {}
 #endif	/* CONFIG_GENERIC_BUG */
-
-#ifdef RETPOLINE
-extern bool retpoline_module_ok(bool has_retpoline);
-#else
-static inline bool retpoline_module_ok(bool has_retpoline)
-{
-	return true;
-}
-#endif
 
 #ifdef CONFIG_MODULE_SIG
 static inline bool module_sig_ok(struct module *module)

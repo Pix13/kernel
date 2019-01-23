@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _CMMB_CLASS_H_
 #define _CMMB_CLASS_H_
 

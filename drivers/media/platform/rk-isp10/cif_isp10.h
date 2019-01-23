@@ -98,12 +98,6 @@ enum cif_isp10_pm_state {
 	CIF_ISP10_PM_STATE_STREAMING
 };
 
-enum cif_isp10_ispstate {
-	CIF_ISP10_STATE_IDLE      = 0,
-	CIF_ISP10_STATE_RUNNING   = 1,
-	CIF_ISP10_STATE_STOPPING  = 2
-};
-
 enum cif_isp10_inp {
 	CIF_ISP10_INP_CSI     = 0x10000000,
 	CIF_ISP10_INP_CPI     = 0x20000000,
@@ -246,7 +240,6 @@ enum cif_isp10_pix_fmt {
 	/* YUV */
 	CIF_YUV400			= 0x10008000,
 	CIF_YVU400			= 0x10008004,
-	CIF_Y10				= 0x1000a000,
 
 	CIF_YUV420I			= 0x1000c220,
 	CIF_YUV420SP			= 0x1000c221,	/* NV12 */
@@ -295,7 +288,7 @@ enum cif_isp10_pix_fmt {
 	/* RGB */
 	CIF_RGB565			= 0x20010000,
 	CIF_RGB666			= 0x20012000,
-	CIF_RGB888			= 0x20020000,
+	CIF_RGB888			= 0x20018000,
 
 	/* RAW Bayer */
 	CIF_BAYER_SBGGR8		= 0x30008000,
@@ -438,13 +431,7 @@ struct cif_isp10_mi_path_config {
 	u32 y_size;
 	u32 cb_size;
 	u32 cr_size;
-	u32 burst_len;
 	bool busy;
-
-	/* FOR BT655: 0 = ODD, 1 = EVEN */
-	bool field_flag;
-	/* for interlace offset */
-	u32 vir_len_offset;
 };
 
 struct cif_isp10_zoom_buffer_info {
@@ -471,7 +458,6 @@ struct cif_isp10_buffer {
 struct cif_isp10_metadata_s {
 	unsigned int cnt;
 	unsigned int vmas;
-	spinlock_t spinlock;
 	unsigned char *d;
 };
 
@@ -555,7 +541,7 @@ struct cif_isp10_mi_state {
 
 struct cif_isp10_img_src_exp {
 	struct list_head list;
-	struct cif_isp10_img_src_ext_ctrl exp;
+	struct cif_isp10_img_src_ext_ctrl *exp;
 };
 
 struct cif_isp10_img_src_data {
@@ -569,12 +555,11 @@ struct cif_isp10_img_src_exps {
 
 	struct mutex mutex;	/* protect frm_exp */
 	struct cif_isp10_img_src_data data[2];
-	unsigned char exp_valid_frms[2];
+	unsigned char exp_valid_frms;
 };
 
 enum cif_isp10_isp_vs_cmd {
-	CIF_ISP10_VS_EXIT = 0,
-	CIF_ISP10_VS_EXP = 1
+	CIF_ISP10_VS_EXP = 0,
 };
 
 struct cif_isp10_isp_vs_work {
@@ -616,15 +601,9 @@ struct cif_isp10_device {
 	struct v4l2_device v4l2_dev;
 	enum cif_isp10_pm_state pm_state;
 	enum cif_isp10_img_src_state img_src_state;
-	enum cif_isp10_ispstate isp_state;
 
 	spinlock_t vbq_lock;	/* spinlock for videobuf queues */
 	spinlock_t vbreq_lock;	/* spinlock for videobuf requeues */
-	spinlock_t iowrite32_verify_lock;
-	spinlock_t isp_state_lock;
-
-	wait_queue_head_t isp_stop_wait;	/* wait while isp stop */
-	unsigned int isp_stop_flags;
 
 	struct cif_isp10_img_src *img_src;
 	struct cif_isp10_img_src *img_src_array[CIF_ISP10_NUM_INPUTS];
@@ -659,7 +638,7 @@ struct cif_isp10_device {
 	int   otf_zsl_mode;
 	struct flash_timeinfo_s flash_t;
 
-	struct pltfrm_soc_cfg soc_cfg;
+	struct pltfrm_soc_cfg *soc_cfg;
 	void *nodes;
 
 };
@@ -721,10 +700,6 @@ int cif_isp10_streamoff(
 	struct cif_isp10_device *dev,
 	u32 stream_ids);
 
-int cif_isp10_g_input(
-	struct cif_isp10_device *dev,
-	enum cif_isp10_inp *inp);
-
 int cif_isp10_s_input(
 	struct cif_isp10_device *dev,
 	enum cif_isp10_inp inp);
@@ -782,18 +757,21 @@ int cif_isp10_s_ctrl(
 	const enum cif_isp10_cid id,
 	int val);
 
-int cif_isp10_s_vb_metadata(
+void cif_isp10_dbgfs_fill_sensor_aec_para(
+	struct cif_isp10_device *cif_isp10_dev,
+	s32 exp_time,
+	u16 gain);
+
+int cif_isp10_s_isp_metadata(
 	struct cif_isp10_device *dev,
-	struct cif_isp10_isp_readout_work *readout_work);
+	struct cif_isp10_isp_readout_work *readout_work,
+	struct cifisp_isp_other_cfg *new_other,
+	struct cifisp_isp_meas_cfg *new_meas,
+	struct cifisp_stat_buffer *new_stats);
 
 int cif_isp10_s_exp(
 	struct cif_isp10_device *dev,
 	struct cif_isp10_img_src_ext_ctrl *exp_ctrl);
-
-int cif_isp10_s_vcm(
-	struct cif_isp10_device *dev,
-	unsigned int id,
-	int val);
 
 void cif_isp10_sensor_mode_data_sync(
 	struct cif_isp10_device *dev,

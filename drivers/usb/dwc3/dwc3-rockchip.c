@@ -142,8 +142,6 @@ static ssize_t dwc3_rockchip_force_mode_write(struct file *file,
 	flush_work(&rockchip->otg_work);
 	if (dwc->dr_mode == USB_DR_MODE_PERIPHERAL)
 		phy_set_mode(dwc->usb2_generic_phy, PHY_MODE_USB_DEVICE);
-	else if (dwc->dr_mode == USB_DR_MODE_HOST)
-		phy_set_mode(dwc->usb2_generic_phy, PHY_MODE_USB_HOST);
 
 	return count;
 }
@@ -322,8 +320,8 @@ static ssize_t dwc3_rockchip_host_testmode_write(struct file *file,
 				    EXTCON_PROP_USB_TYPEC_POLARITY, property);
 		extcon_set_cable_state_(edev, EXTCON_USB_HOST, true);
 
-		/* Add a delay 1s to wait for XHCI HCD init */
-		msleep(1000);
+		/* Add a delay 1~1.5s to wait for XHCI HCD init */
+		usleep_range(1000000, 1500000);
 	}
 
 	dwc3_rockchip_set_test_mode(rockchip, testmode);
@@ -408,8 +406,7 @@ static void dwc3_rockchip_otg_extcon_evt_work(struct work_struct *work)
 	unsigned long		flags;
 	int			ret;
 	int			val;
-	u32			reg;
-	u32			count = 0;
+	u32			reg, count;
 
 	mutex_lock(&rockchip->lock);
 
@@ -440,18 +437,8 @@ static void dwc3_rockchip_otg_extcon_evt_work(struct work_struct *work)
 		 */
 		if (!rockchip->skip_suspend) {
 			reset_control_assert(rockchip->otg_rst);
-			udelay(1);
+			usleep_range(1000, 1200);
 			reset_control_deassert(rockchip->otg_rst);
-
-			/* Wait until dwc3 core resume from PM suspend */
-			while (dwc->dev->power.is_suspended) {
-				if (++count > 1000) {
-					dev_err(rockchip->dev,
-						"wait for dwc3 core resume timeout!\n");
-						goto out;
-				}
-				usleep_range(100, 200);
-			}
 
 			pm_runtime_get_sync(rockchip->dev);
 			pm_runtime_get_sync(dwc->dev);
@@ -468,21 +455,8 @@ static void dwc3_rockchip_otg_extcon_evt_work(struct work_struct *work)
 	} else if (rockchip->edev ?
 		   extcon_get_cable_state_(edev, EXTCON_USB_HOST) :
 		   (dwc->dr_mode == USB_DR_MODE_HOST)) {
-		if (rockchip->connected) {
-			reg = dwc3_readl(dwc->regs, DWC3_GCTL);
-
-			/*
-			 * If the connected flag is true, and the DWC3 is
-			 * is in device mode, it means that the Type-C Dongle
-			 * is doing data role swap (UFP -> DFP), so we need
-			 * to disconnect UFP first, and then swich DWC3 to
-			 * DFP depends on the next extcon notifier.
-			 */
-			if (DWC3_GCTL_PRTCAP(reg) == DWC3_GCTL_PRTCAP_DEVICE)
-				goto disconnect;
-			else
-				goto out;
-		}
+		if (rockchip->connected)
+			goto out;
 
 		if (rockchip->skip_suspend) {
 			pm_runtime_put(dwc->dev);
@@ -511,7 +485,7 @@ static void dwc3_rockchip_otg_extcon_evt_work(struct work_struct *work)
 		 * registers while the reset is asserted, with unknown impact.
 		 */
 		reset_control_assert(rockchip->otg_rst);
-		udelay(1);
+		usleep_range(1000, 1200);
 		reset_control_deassert(rockchip->otg_rst);
 
 		/*
@@ -562,7 +536,6 @@ static void dwc3_rockchip_otg_extcon_evt_work(struct work_struct *work)
 		if (!rockchip->connected)
 			goto out;
 
-disconnect:
 		reg = dwc3_readl(dwc->regs, DWC3_GCTL);
 
 		/*
@@ -585,6 +558,7 @@ disconnect:
 
 			if (hcd->state != HC_STATE_HALT) {
 				xhci->xhc_state |= XHCI_STATE_REMOVING;
+				count = 0;
 
 				/*
 				 * Wait until XHCI controller resume from
@@ -938,7 +912,7 @@ static int dwc3_rockchip_runtime_resume(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused dwc3_rockchip_suspend(struct device *dev)
+static int dwc3_rockchip_suspend(struct device *dev)
 {
 	struct dwc3_rockchip *rockchip = dev_get_drvdata(dev);
 	struct dwc3 *dwc = rockchip->dwc;
@@ -964,16 +938,10 @@ static int __maybe_unused dwc3_rockchip_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused dwc3_rockchip_resume(struct device *dev)
+static int dwc3_rockchip_resume(struct device *dev)
 {
 	struct dwc3_rockchip *rockchip = dev_get_drvdata(dev);
 	struct dwc3 *dwc = rockchip->dwc;
-
-	if (!rockchip->connected) {
-		reset_control_assert(rockchip->otg_rst);
-		udelay(1);
-		reset_control_deassert(rockchip->otg_rst);
-	}
 
 	rockchip->suspended = false;
 

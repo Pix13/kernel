@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _RK31XX_LVDS_H_
 #define _RK31XX_LVDS_H_
 

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Export interface in /sys/class/touchpanel for calibration.
  *

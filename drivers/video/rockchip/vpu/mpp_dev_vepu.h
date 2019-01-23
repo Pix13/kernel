@@ -27,7 +27,6 @@ struct rockchip_vepu_dev {
 
 	struct clk *aclk;
 	struct clk *hclk;
-	struct clk *cclk;
 
 	struct reset_control *rst_a;
 	struct reset_control *rst_h;

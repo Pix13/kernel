@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef HALMAC_POWER_SEQUENCE_8822B
 #define HALMAC_POWER_SEQUENCE_8822B
 

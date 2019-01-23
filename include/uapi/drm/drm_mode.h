@@ -87,18 +87,19 @@
 #define  DRM_MODE_FLAG_PIC_AR_16_9 \
 			(DRM_MODE_PICTURE_ASPECT_16_9<<19)
 
-#define DRM_MODE_FLAG_PPIXDATA			(1<<31)
+/*
+ * HDMI 2.0
+ */
+#define DRM_MODE_FLAG_420_MASK			(0x03<<23)
+#define  DRM_MODE_FLAG_420			(1<<23)
+#define  DRM_MODE_FLAG_420_ONLY			(1<<24)
+
 /* DPMS flags */
 /* bit compatible with the xorg definitions. */
 #define DRM_MODE_DPMS_ON	0
 #define DRM_MODE_DPMS_STANDBY	1
 #define DRM_MODE_DPMS_SUSPEND	2
 #define DRM_MODE_DPMS_OFF	3
-
-/* Content Protection Flags */
-#define DRM_MODE_CONTENT_PROTECTION_UNDESIRED   0
-#define DRM_MODE_CONTENT_PROTECTION_DESIRED     1
-#define DRM_MODE_CONTENT_PROTECTION_ENABLED     2
 
 /* Scaling mode options */
 #define DRM_MODE_SCALE_NONE		0 /* Unmodified timing (display or
@@ -116,11 +117,6 @@
 #define DRM_MODE_DIRTY_OFF      0
 #define DRM_MODE_DIRTY_ON       1
 #define DRM_MODE_DIRTY_ANNOTATE 2
-
-/* Content Protection Flags */
-#define DRM_MODE_CONTENT_PROTECTION_UNDESIRED	0
-#define DRM_MODE_CONTENT_PROTECTION_DESIRED     1
-#define DRM_MODE_CONTENT_PROTECTION_ENABLED     2
 
 struct drm_mode_modeinfo {
 	__u32 clock;
@@ -521,29 +517,6 @@ struct drm_color_lut {
 	__u16 green;
 	__u16 blue;
 	__u16 reserved;
-};
-
-enum supported_eotf_type {
-	TRADITIONAL_GAMMA_SDR = 0,
-	TRADITIONAL_GAMMA_HDR,
-	SMPTE_ST2084,
-	HLG,
-	FUTURE_EOTF
-};
-
-/* HDR Metadata */
-struct hdr_static_metadata {
-	uint16_t eotf;
-	uint16_t type;
-	uint16_t display_primaries_x[3];
-	uint16_t display_primaries_y[3];
-	uint16_t white_point_x;
-	uint16_t white_point_y;
-	uint16_t max_mastering_display_luminance;
-	uint16_t min_mastering_display_luminance;
-	uint16_t max_fall;
-	uint16_t max_cll;
-	uint16_t min_cll;
 };
 
 #define DRM_MODE_PAGE_FLIP_EVENT 0x01

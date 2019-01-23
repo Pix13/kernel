@@ -11,8 +11,8 @@
 #include <linux/completion.h>
 #include <linux/cpumask.h>
 #include <linux/uprobes.h>
+#include <linux/rcupdate.h>
 #include <linux/page-flags-layout.h>
-#include <linux/workqueue.h>
 #include <asm/page.h>
 #include <asm/mmu.h>
 
@@ -517,6 +517,9 @@ struct mm_struct {
 	bool tlb_flush_batched;
 #endif
 	struct uprobes_state uprobes_state;
+#ifdef CONFIG_PREEMPT_RT_BASE
+	struct rcu_head delayed_drop;
+#endif
 #ifdef CONFIG_X86_INTEL_MPX
 	/* address of the bounds directory */
 	void __user *bd_addr;
@@ -524,7 +527,6 @@ struct mm_struct {
 #ifdef CONFIG_HUGETLB_PAGE
 	atomic_long_t hugetlb_usage;
 #endif
-	struct work_struct async_put_work;
 };
 
 static inline void mm_init_cpumask(struct mm_struct *mm)

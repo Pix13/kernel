@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __INC_HAL8821CWIFIONLYHWCFG_H
 #define __INC_HAL8821CWIFIONLYHWCFG_H
 

@@ -568,7 +568,8 @@ alloc_failed:
 	return err;
 }
 
-int pltfrm_rk3288_cfg(struct pltfrm_soc_cfg_para *cfg)
+int pltfrm_rk3288_cfg(
+		struct pltfrm_soc_cfg_para *cfg)
 {
 	switch (cfg->cmd) {
 	case PLTFRM_MCLK_CFG: {

@@ -1057,7 +1057,7 @@ static int wifi_probe(struct platform_device *pdev)
 
 #ifdef CONFIG_GPIO_WAKEUP
 	printk("%s: gpio:%d wifi_wake_gpio:%d\n", __func__,
-	       (int)wifi_irqres->start, wifi_wake_gpio);
+	       wifi_irqres->start, wifi_wake_gpio);
 
 	if (wifi_wake_gpio > 0) {
 #ifdef CONFIG_PLATFORM_INTEL_BYT

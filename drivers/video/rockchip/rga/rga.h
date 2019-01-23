@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _RGA_DRIVER_H_
 #define _RGA_DRIVER_H_
 
@@ -20,7 +19,6 @@
 #define RGA_OUT_OF_RESOURCES    -10
 #define RGA_MALLOC_ERROR        -11
 
-#define RGA_BUF_GEM_TYPE_MASK	0xC0
 
 #define rgaIS_ERROR(status)			(status < 0)
 #define rgaNO_ERROR(status)			(status >= 0)
@@ -186,7 +184,7 @@ typedef struct MMU
 {
     unsigned char mmu_en;
     unsigned long base_addr;
-	uint32_t mmu_flag;
+    uint32_t mmu_flag;     /* [0] mmu enable [1] src_flush [2] dst_flush [3] CMD_flush [4~5] page size*/
 } MMU;
 
 
@@ -301,9 +299,7 @@ struct rga_req {
     uint8_t  src_trans_mode;
 
     struct sg_table *sg_src;
-	struct sg_table *sg_dst;
-	struct dma_buf_attachment *attach_src;
-	struct dma_buf_attachment *attach_dst;
+    struct sg_table *sg_dst;
 };
 
 
@@ -381,12 +377,6 @@ struct rga_reg {
     //atomic_t int_enable;
 
     //struct rga_req      req;
-
-	struct sg_table *sg_src;
-	struct sg_table *sg_dst;
-
-	struct dma_buf_attachment *attach_src;
-	struct dma_buf_attachment *attach_dst;
 };
 
 
@@ -405,13 +395,10 @@ typedef struct rga_service_info {
     uint32_t            cmd_buff[28*8];/* cmd_buff for rga */
     uint32_t            *pre_scale_buf;
     unsigned long       *pre_scale_buf_virtual;
-	atomic_t            int_disable;     /* 0 int enable 1 int disable  */
+    atomic_t            int_disable;     /* 0 int enable 1 int disable  */
     atomic_t            cmd_num;
-	atomic_t src_format_swt;
-	int last_prc_src_format;
-	atomic_t            rga_working;
+    atomic_t            rga_working;
     bool                enable;
-	u32 dev_mode;
 
     //struct rga_req      req[10];
 
@@ -435,7 +422,6 @@ typedef struct rga_service_info {
 #define RGA_AXI_ID               0x014
 #define RGA_MMU_STA_CTRL         0x018
 #define RGA_MMU_STA              0x01c
-#define RGA_VERSION              0x028
 
 //Command code start
 #define RGA_MODE_CTRL            0x100

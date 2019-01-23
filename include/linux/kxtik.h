@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #define KXTIK_DEVID		0x05	//chip id
 #define KXTIK_RANGE	2000000
 

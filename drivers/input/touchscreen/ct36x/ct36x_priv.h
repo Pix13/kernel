@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __CT36X_PRIV__
 #define __CT36X_PRIV__
 

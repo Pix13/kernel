@@ -334,7 +334,7 @@ static int pca9532_destroy_devices(struct pca9532_data *data, int n_devs)
 	}
 
 #ifdef CONFIG_LEDS_PCA9532_GPIO
-	if (data->gpio.parent)
+	if (data->gpio.dev)
 		gpiochip_remove(&data->gpio);
 #endif
 
@@ -429,13 +429,13 @@ static int pca9532_configure(struct i2c_client *client,
 		data->gpio.can_sleep = 1;
 		data->gpio.base = pdata->gpio_base;
 		data->gpio.ngpio = data->chip_info->num_leds;
-		data->gpio.parent = &client->dev;
+		data->gpio.dev = &client->dev;
 		data->gpio.owner = THIS_MODULE;
 
 		err = gpiochip_add(&data->gpio);
 		if (err) {
 			/* Use data->gpio.dev as a flag for freeing gpiochip */
-			data->gpio.parent = NULL;
+			data->gpio.dev = NULL;
 			dev_warn(&client->dev, "could not add gpiochip\n");
 		} else {
 			dev_info(&client->dev, "gpios %i...%i\n",

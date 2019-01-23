@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0
 # sensor drivers
 obj-$(CONFIG_ANGLE_DEVICE)                    += angle/
 obj-$(CONFIG_GSENSOR_DEVICE)			+= accel/

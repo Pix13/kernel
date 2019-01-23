@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _DWC_OS_DEP_H_
 #define _DWC_OS_DEP_H_
 

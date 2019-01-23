@@ -473,9 +473,6 @@ static int ipoib_mcast_join(struct net_device *dev, struct ipoib_mcast *mcast)
 	    !test_bit(IPOIB_FLAG_OPER_UP, &priv->flags))
 		return -EINVAL;
 
-	init_completion(&mcast->done);
-	set_bit(IPOIB_MCAST_FLAG_BUSY, &mcast->flags);
-
 	ipoib_dbg_mcast(priv, "joining MGID %pI6\n", mcast->mcmember.mgid.raw);
 
 	rec.mgid     = mcast->mcmember.mgid;
@@ -634,6 +631,8 @@ void ipoib_mcast_join_task(struct work_struct *work)
 			if (mcast->backoff == 1 ||
 			    time_after_eq(jiffies, mcast->delay_until)) {
 				/* Found the next unjoined group */
+				init_completion(&mcast->done);
+				set_bit(IPOIB_MCAST_FLAG_BUSY, &mcast->flags);
 				if (ipoib_mcast_join(dev, mcast)) {
 					spin_unlock_irq(&priv->lock);
 					return;
@@ -653,9 +652,11 @@ out:
 		queue_delayed_work(priv->wq, &priv->mcast_task,
 				   delay_until - jiffies);
 	}
-	if (mcast)
+	if (mcast) {
+		init_completion(&mcast->done);
+		set_bit(IPOIB_MCAST_FLAG_BUSY, &mcast->flags);
 		ipoib_mcast_join(dev, mcast);
-
+	}
 	spin_unlock_irq(&priv->lock);
 }
 
@@ -774,10 +775,7 @@ void ipoib_mcast_send(struct net_device *dev, u8 *daddr, struct sk_buff *skb)
 		spin_lock_irqsave(&priv->lock, flags);
 		if (!neigh) {
 			neigh = ipoib_neigh_alloc(daddr, dev);
-			/* Make sure that the neigh will be added only
-			 * once to mcast list.
-			 */
-			if (neigh && list_empty(&neigh->list)) {
+			if (neigh) {
 				kref_get(&mcast->ah->ref);
 				neigh->ah	= mcast->ah;
 				list_add_tail(&neigh->list, &mcast->neigh_list);
@@ -864,7 +862,7 @@ void ipoib_mcast_restart_task(struct work_struct *work)
 
 	ipoib_dbg_mcast(priv, "restarting multicast task\n");
 
-	local_irq_save(flags);
+	local_irq_save_nort(flags);
 	netif_addr_lock(dev);
 	spin_lock(&priv->lock);
 
@@ -946,7 +944,7 @@ void ipoib_mcast_restart_task(struct work_struct *work)
 
 	spin_unlock(&priv->lock);
 	netif_addr_unlock(dev);
-	local_irq_restore(flags);
+	local_irq_restore_nort(flags);
 
 	/*
 	 * make sure the in-flight joins have finished before we attempt

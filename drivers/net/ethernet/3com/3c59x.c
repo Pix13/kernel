@@ -842,9 +842,9 @@ static void poll_vortex(struct net_device *dev)
 {
 	struct vortex_private *vp = netdev_priv(dev);
 	unsigned long flags;
-	local_irq_save(flags);
+	local_irq_save_nort(flags);
 	(vp->full_bus_master_rx ? boomerang_interrupt:vortex_interrupt)(dev->irq,dev);
-	local_irq_restore(flags);
+	local_irq_restore_nort(flags);
 }
 #endif
 
@@ -907,7 +907,7 @@ static struct eisa_device_id vortex_eisa_ids[] = {
 };
 MODULE_DEVICE_TABLE(eisa, vortex_eisa_ids);
 
-static int vortex_eisa_probe(struct device *device)
+static int __init vortex_eisa_probe(struct device *device)
 {
 	void __iomem *ioaddr;
 	struct eisa_device *edev;
@@ -1916,12 +1916,12 @@ static void vortex_tx_timeout(struct net_device *dev)
 			 * Block interrupts because vortex_interrupt does a bare spin_lock()
 			 */
 			unsigned long flags;
-			local_irq_save(flags);
+			local_irq_save_nort(flags);
 			if (vp->full_bus_master_tx)
 				boomerang_interrupt(dev->irq, dev);
 			else
 				vortex_interrupt(dev->irq, dev);
-			local_irq_restore(flags);
+			local_irq_restore_nort(flags);
 		}
 	}
 

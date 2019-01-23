@@ -92,8 +92,6 @@
 #define SCLK_TIMER14		137
 #define SCLK_TIMER15		138
 #define SCLK_DDRCLK		139
-#define SCLK_TSP		140
-#define SCLK_HSADC_TSP		141
 
 #define DCLK_VOP		190
 #define MCLK_CRYPTO		191

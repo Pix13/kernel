@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0
 menuconfig SWITCH
 	tristate "Switch class support"
 	help

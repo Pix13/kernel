@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * rk3190_codec.h  --  RK3190 CODEC ALSA SoC audio driver
  *

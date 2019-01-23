@@ -498,11 +498,6 @@ static char * __init unpack_to_rootfs(char *buf, unsigned long len)
 			error("junk in compressed archive");
 		if (state != Reset)
 			error("junk in compressed archive");
-		#ifdef CONFIG_ARCH_ROCKCHIP
-		else
-			break;
-		#endif
-
 		this_header = saved_offset + my_inptr;
 		buf += my_inptr;
 		len -= my_inptr;
@@ -626,11 +621,8 @@ static int __init populate_rootfs(void)
 {
 	char *err;
 
-	if (do_skip_initramfs) {
-		if (initrd_start)
-			free_initrd();
+	if (do_skip_initramfs)
 		return default_rootfs();
-	}
 
 	err = unpack_to_rootfs(__initramfs_start, __initramfs_size);
 	if (err)

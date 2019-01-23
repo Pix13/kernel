@@ -45,6 +45,10 @@
 #include "rk3288.dtsi"
 
 / {
+	chosen {
+		bootargs = "earlycon=uart8250,mmio32,0xff690000 swiotlb=1";
+	};
+
 	edp_panel: edp-panel {
 		status = "disabled";
 
@@ -301,8 +305,6 @@
 		clock-names = "mclk";
 		interrupt-parent = <&gpio6>;
 		interrupts = <7 IRQ_TYPE_EDGE_FALLING>;
-		pinctrl-names = "default";
-		pinctrl-0 = <&i2s0_mclk>;
 	};
 };
 
@@ -359,7 +361,9 @@
 
 &sdio0 {
 	status = "okay";
-	max-frequency = <150000000>;
+
+	clock-frequency = <50000000>;
+	clock-freq-min-max = <200000 50000000>;
 
 	bus-width = <4>;
 	cap-sd-highspeed;
@@ -390,6 +394,7 @@
 };
 
 &tsadc {
+	rockchip,hw-tshut-mode = <0>; /* tshut mode 0:CRU 1:GPIO */
 	rockchip,hw-tshut-polarity = <0>; /* tshut polarity 0:LOW 1:HIGH */
 	status = "okay";
 };

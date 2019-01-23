@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #define ION_TRACE_EMIT
 
 #ifdef ION_TRACE_EMIT

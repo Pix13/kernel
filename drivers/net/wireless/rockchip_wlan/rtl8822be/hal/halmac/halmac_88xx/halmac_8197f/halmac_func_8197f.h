@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _HALMAC_FUNC_8197F_H_
 #define _HALMAC_FUNC_8197F_H_
 

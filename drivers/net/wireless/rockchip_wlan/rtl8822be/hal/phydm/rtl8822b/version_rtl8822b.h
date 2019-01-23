@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*RTL8822B PHY Parameters*/
 /* 
 [Caution] 

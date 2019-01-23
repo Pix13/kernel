@@ -317,6 +317,10 @@
 	};
 };
 
+&edp_in {
+	/delete-node/ endpoint@0;
+};
+
 &edp_phy {
 	status = "okay";
 };
@@ -362,6 +366,10 @@
 &hevc_service {
 	status = "okay";
 
+};
+
+&hdmi_in {
+	/delete-node/ endpoint@1;
 };
 
 &i2c0 {
@@ -726,6 +734,7 @@
 };
 
 &tsadc {
+	rockchip,hw-tshut-mode = <0>;
 	rockchip,hw-tshut-polarity = <0>;
 	status = "okay";
 };
@@ -770,6 +779,10 @@
 	status = "okay";
 };
 
+&vopb_out {
+	/delete-node/ endpoint@1;
+};
+
 &vopl {
 	status = "okay";
 };
@@ -780,6 +793,10 @@
 
 &vpu_service {
 	status = "okay";
+};
+
+&vopl_out {
+	/delete-node/ endpoint@0;
 };
 
 &wdt {

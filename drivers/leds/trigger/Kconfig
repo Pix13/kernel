@@ -61,7 +61,7 @@ config LEDS_TRIGGER_BACKLIGHT
 
 config LEDS_TRIGGER_CPU
 	bool "LED CPU Trigger"
-	depends on LEDS_TRIGGERS
+	depends on LEDS_TRIGGERS && !PREEMPT_RT_BASE
 	help
 	  This allows LEDs to be controlled by active CPUs. This shows
 	  the active CPUs across an array of LEDs so you can see which
@@ -107,11 +107,5 @@ config LEDS_TRIGGER_CAMERA
 	  This allows LEDs to be controlled as a camera flash/torch device.
 	  This enables direct flash/torch on/off by the driver, kernel space.
 	  If unsure, say Y.
-
-config LEDS_TRIGGER_MULTI_CTRL
-	tristate "LED Multi-Control Trigger"
-	depends on LEDS_TRIGGERS && LEDS_TRIGGER_DEFAULT_ON && LEDS_TRIGGER_TIMER && LEDS_TRIGGER_ONESHOT
-	help
-	  This allows userspace control all the leds at one time by ioctl operation.
 
 endif # LEDS_TRIGGERS

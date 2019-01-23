@@ -192,12 +192,12 @@ static s32 update_txdesc(struct xmit_frame *pxmitframe, u8 *pmem, s32 sz, u8 bag
 #endif //CONFIG_P2P
 #endif
 #ifndef CONFIG_USE_USB_BUFFER_ALLOC_TX
-	if ((PACKET_OFFSET_SZ != 0)
-		&& (_FALSE == bagg_pkt)
-		&& (urb_zero_packet_chk(padapter, sz) == 0)) {
-		ptxdesc = (struct tx_desc *)(pmem + PACKET_OFFSET_SZ);
+	if((_FALSE == bagg_pkt) && (urb_zero_packet_chk(padapter, sz)==0))
+	{
+		ptxdesc = (struct tx_desc *)(pmem+PACKET_OFFSET_SZ);
 		pull = 1;
 		pxmitframe->pkt_offset --;
+
 	}
 #endif	// CONFIG_USE_USB_BUFFER_ALLOC_TX
 
@@ -236,12 +236,11 @@ s32 rtl8723bu_xmit_buf_handler(PADAPTER padapter)
 		return _FAIL;
 	}
 
-	if (RTW_CANNOT_RUN(padapter)) {
-		RT_TRACE(_module_hal_xmit_c_, _drv_notice_
-				, ("%s: bDriverStopped(%s) bSurpriseRemoved(%s)!\n"
-				, __func__
-				, rtw_is_drv_stopped(padapter)?"True":"False"
-				, rtw_is_surprise_removed(padapter)?"True":"False"));
+	ret = (padapter->bDriverStopped == _TRUE) || (padapter->bSurpriseRemoved == _TRUE);
+	if (ret) {
+		RT_TRACE(_module_hal_xmit_c_, _drv_notice_,
+				 ("%s: bDriverStopped(%d) bSurpriseRemoved(%d)!\n",
+				  __FUNCTION__, padapter->bDriverStopped, padapter->bSurpriseRemoved));
 		return _FAIL;
 	}
 
@@ -405,9 +404,6 @@ s32 rtl8723bu_xmitframe_complete(_adapter *padapter, struct xmit_priv *pxmitpriv
 	// dump frame variable
 	u32 ff_hwaddr;
 
-	_list *sta_plist, *sta_phead;
-	u8 single_sta_in_queue = _FALSE;
-
 #ifndef IDEA_CONDITION
 	int res = _SUCCESS;
 #endif
@@ -458,12 +454,11 @@ s32 rtl8723bu_xmitframe_complete(_adapter *padapter, struct xmit_priv *pxmitpriv
 		pxmitframe->buf_addr = pxmitbuf->pbuf;
 		pxmitbuf->priv_data = pxmitframe;
 
-		/* pxmitframe->agg_num = 1; */ /* alloc xmitframe should assign to 1. */
-		/* pxmitframe->pkt_offset = 1; */ /* first frame of aggregation, reserve offset */
-		pxmitframe->pkt_offset = (PACKET_OFFSET_SZ/8);
+		//pxmitframe->agg_num = 1; // alloc xmitframe should assign to 1.
+		pxmitframe->pkt_offset = 1; // first frame of aggregation, reserve offset
 
 		if (rtw_xmitframe_coalesce(padapter, pxmitframe->pkt, pxmitframe) == _FALSE) {
-			DBG_871X("%s coalesce 1st xmitframe failed\n", __func__);
+			DBG_871X("%s coalesce 1st xmitframe failed \n",__FUNCTION__);
 			continue;
 		}
 
@@ -520,10 +515,6 @@ s32 rtl8723bu_xmitframe_complete(_adapter *padapter, struct xmit_priv *pxmitpriv
 	}
 
 	_enter_critical_bh(&pxmitpriv->lock, &irqL);
-
-	sta_phead = get_list_head(phwxmit->sta_queue);
-	sta_plist = get_next(sta_phead);
-	single_sta_in_queue = rtw_end_of_queue_search(sta_phead, get_next(sta_plist));
 
 	xmitframe_phead = get_list_head(&ptxservq->sta_pending);
 	xmitframe_plist = get_next(xmitframe_phead);
@@ -604,11 +595,6 @@ s32 rtl8723bu_xmitframe_complete(_adapter *padapter, struct xmit_priv *pxmitpriv
 	}
 	if (_rtw_queue_empty(&ptxservq->sta_pending) == _TRUE)
 		rtw_list_delete(&ptxservq->tx_pending);
-	else if (single_sta_in_queue == _FALSE) {
-		/* Re-arrange the order of stations in this ac queue to balance the service for these stations */
-		rtw_list_delete(&ptxservq->tx_pending);
-		rtw_list_insert_tail(&ptxservq->tx_pending, get_list_head(phwxmit->sta_queue));
-	}
 
 	_exit_critical_bh(&pxmitpriv->lock, &irqL);
 
@@ -621,8 +607,7 @@ s32 rtl8723bu_xmitframe_complete(_adapter *padapter, struct xmit_priv *pxmitpriv
 
 #ifndef CONFIG_USE_USB_BUFFER_ALLOC_TX
 	//3 3. update first frame txdesc
-	if ((PACKET_OFFSET_SZ != 0)
-		&& (pbuf_tail % bulkSize) == 0) {
+	if ((pbuf_tail % bulkSize) == 0) {
 		// remove pkt_offset
 		pbuf_tail -= PACKET_OFFSET_SZ;
 		pfirstframe->buf_addr += PACKET_OFFSET_SZ;
@@ -756,19 +741,24 @@ static s32 pre_xmitframe(_adapter *padapter, struct xmit_frame *pxmitframe)
 	struct xmit_priv *pxmitpriv = &padapter->xmitpriv;
 	struct pkt_attrib *pattrib = &pxmitframe->attrib;
 	struct mlme_priv *pmlmepriv = &padapter->mlmepriv;
-	u8 lg_sta_num;
+#ifdef CONFIG_TDLS	
+	struct mlme_ext_priv	*pmlmeext = &(padapter->mlmeextpriv);
+	struct mlme_ext_info	*pmlmeinfo = &(pmlmeext->mlmext_info);
+	//HAL_DATA_TYPE	*pHalData = GET_HAL_DATA(padapter);
+#endif
 
 	_enter_critical_bh(&pxmitpriv->lock, &irqL);
 
 	if (rtw_txframes_sta_ac_pending(padapter, pattrib) > 0)
 		goto enqueue;
 
-	if (rtw_xmit_ac_blocked(padapter) == _TRUE)
+	if (check_fwstate(pmlmepriv, _FW_UNDER_SURVEY|_FW_UNDER_LINKING) == _TRUE)
 		goto enqueue;
 
-	rtw_dev_iface_status(padapter, NULL, NULL , &lg_sta_num, NULL, NULL);
-	if (lg_sta_num)
+#ifdef CONFIG_CONCURRENT_MODE	
+	if (check_buddy_fwstate(padapter, _FW_UNDER_SURVEY|_FW_UNDER_LINKING) == _TRUE)
 		goto enqueue;
+#endif
 
 	pxmitbuf = rtw_alloc_xmitbuf(pxmitpriv);
 	if (pxmitbuf == NULL)

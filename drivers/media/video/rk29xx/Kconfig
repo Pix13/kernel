@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0
 config VIDEO_RK29XX_VOUT
 	tristate "RK29XX V4L2-Display driver"
 	depends on ARCH_RK29

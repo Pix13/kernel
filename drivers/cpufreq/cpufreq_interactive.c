@@ -1308,8 +1308,7 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 	else
 		tunables = common_tunables;
 
-	if (WARN_ON(!tunables && (event != CPUFREQ_GOV_POLICY_INIT)))
-		return -EINVAL;
+	WARN_ON(!tunables && (event != CPUFREQ_GOV_POLICY_INIT));
 
 	switch (event) {
 	case CPUFREQ_GOV_POLICY_INIT:
@@ -1487,7 +1486,6 @@ static int __init cpufreq_interactive_init(void)
 	unsigned int i;
 	struct cpufreq_interactive_cpuinfo *pcpu;
 	struct sched_param param = { .sched_priority = MAX_RT_PRIO-1 };
-	int ret = 0;
 
 	/* Initalize per-cpu timers */
 	for_each_possible_cpu(i) {
@@ -1516,12 +1514,7 @@ static int __init cpufreq_interactive_init(void)
 	/* NB: wake up so the thread does not look hung to the freezer */
 	wake_up_process(speedchange_task);
 
-	ret = cpufreq_register_governor(&cpufreq_gov_interactive);
-	if (ret) {
-		kthread_stop(speedchange_task);
-		put_task_struct(speedchange_task);
-	}
-	return ret;
+	return cpufreq_register_governor(&cpufreq_gov_interactive);
 }
 
 #ifdef CONFIG_CPU_FREQ_DEFAULT_GOV_INTERACTIVE

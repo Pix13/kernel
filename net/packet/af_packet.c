@@ -63,6 +63,7 @@
 #include <linux/if_packet.h>
 #include <linux/wireless.h>
 #include <linux/kernel.h>
+#include <linux/delay.h>
 #include <linux/kmod.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
@@ -332,11 +333,11 @@ static void packet_pick_tx_queue(struct net_device *dev, struct sk_buff *skb)
 	skb_set_queue_mapping(skb, queue_index);
 }
 
-/* __register_prot_hook must be invoked through register_prot_hook
+/* register_prot_hook must be invoked with the po->bind_lock held,
  * or from a context in which asynchronous accesses to the packet
  * socket is not possible (packet_create()).
  */
-static void __register_prot_hook(struct sock *sk)
+static void register_prot_hook(struct sock *sk)
 {
 	struct packet_sock *po = pkt_sk(sk);
 
@@ -351,13 +352,8 @@ static void __register_prot_hook(struct sock *sk)
 	}
 }
 
-static void register_prot_hook(struct sock *sk)
-{
-	lockdep_assert_held_once(&pkt_sk(sk)->bind_lock);
-	__register_prot_hook(sk);
-}
-
-/* If the sync parameter is true, we will temporarily drop
+/* {,__}unregister_prot_hook() must be invoked with the po->bind_lock
+ * held.   If the sync parameter is true, we will temporarily drop
  * the po->bind_lock and do a synchronize_net to make sure no
  * asynchronous packet processing paths still refer to the elements
  * of po->prot_hook.  If the sync parameter is false, it is the
@@ -366,8 +362,6 @@ static void register_prot_hook(struct sock *sk)
 static void __unregister_prot_hook(struct sock *sk, bool sync)
 {
 	struct packet_sock *po = pkt_sk(sk);
-
-	lockdep_assert_held_once(&po->bind_lock);
 
 	po->running = 0;
 
@@ -701,7 +695,7 @@ static void prb_retire_rx_blk_timer_expired(unsigned long data)
 	if (BLOCK_NUM_PKTS(pbd)) {
 		while (atomic_read(&pkc->blk_fill_in_prog)) {
 			/* Waiting for skb_copy_bits to finish... */
-			cpu_relax();
+			cpu_chill();
 		}
 	}
 
@@ -963,7 +957,7 @@ static void prb_retire_current_block(struct tpacket_kbdq_core *pkc,
 		if (!(status & TP_STATUS_BLK_TMO)) {
 			while (atomic_read(&pkc->blk_fill_in_prog)) {
 				/* Waiting for skb_copy_bits to finish... */
-				cpu_relax();
+				cpu_chill();
 			}
 		}
 		prb_close_block(pkc, pbd, po, status);
@@ -1659,6 +1653,10 @@ static int fanout_add(struct sock *sk, u16 id, u16 type_flags)
 
 	mutex_lock(&fanout_mutex);
 
+	err = -EINVAL;
+	if (!po->running)
+		goto out;
+
 	err = -EALREADY;
 	if (po->fanout)
 		goto out;
@@ -1672,6 +1670,7 @@ static int fanout_add(struct sock *sk, u16 id, u16 type_flags)
 		atomic_long_set(&rollover->num, 0);
 		atomic_long_set(&rollover->num_huge, 0);
 		atomic_long_set(&rollover->num_failed, 0);
+		po->rollover = rollover;
 	}
 
 	match = NULL;
@@ -1706,32 +1705,23 @@ static int fanout_add(struct sock *sk, u16 id, u16 type_flags)
 		list_add(&match->list, &fanout_list);
 	}
 	err = -EINVAL;
-
-	spin_lock(&po->bind_lock);
-	if (po->running &&
-	    match->type == type &&
+	if (match->type == type &&
 	    match->prot_hook.type == po->prot_hook.type &&
 	    match->prot_hook.dev == po->prot_hook.dev) {
 		err = -ENOSPC;
 		if (atomic_read(&match->sk_ref) < PACKET_FANOUT_MAX) {
 			__dev_remove_pack(&po->prot_hook);
 			po->fanout = match;
-			po->rollover = rollover;
-			rollover = NULL;
 			atomic_inc(&match->sk_ref);
 			__fanout_link(sk, po);
 			err = 0;
 		}
 	}
-	spin_unlock(&po->bind_lock);
-
-	if (err && !atomic_read(&match->sk_ref)) {
-		list_del(&match->list);
-		kfree(match);
-	}
-
 out:
-	kfree(rollover);
+	if (err && rollover) {
+		kfree(rollover);
+		po->rollover = NULL;
+	}
 	mutex_unlock(&fanout_mutex);
 	return err;
 }
@@ -1755,6 +1745,9 @@ static struct packet_fanout *fanout_release(struct sock *sk)
 			list_del(&f->list);
 		else
 			f = NULL;
+
+		if (po->rollover)
+			kfree_rcu(po->rollover, rcu);
 	}
 	mutex_unlock(&fanout_mutex);
 
@@ -2658,7 +2651,6 @@ static int packet_snd(struct socket *sock, struct msghdr *msg, size_t len)
 	int vnet_hdr_len;
 	struct packet_sock *po = pkt_sk(sk);
 	unsigned short gso_type = 0;
-	bool has_vnet_hdr = false;
 	int hlen, tlen, linear;
 	int extra_len = 0;
 	ssize_t n;
@@ -2746,7 +2738,6 @@ static int packet_snd(struct socket *sock, struct msghdr *msg, size_t len)
 				goto out_unlock;
 
 		}
-		has_vnet_hdr = true;
 	}
 
 	if (unlikely(sock_flag(sk, SOCK_NOFCS))) {
@@ -2771,17 +2762,13 @@ static int packet_snd(struct socket *sock, struct msghdr *msg, size_t len)
 	if (skb == NULL)
 		goto out_unlock;
 
-	skb_reset_network_header(skb);
+	skb_set_network_header(skb, reserve);
 
 	err = -EINVAL;
 	if (sock->type == SOCK_DGRAM) {
 		offset = dev_hard_header(skb, dev, ntohs(proto), addr, NULL, len);
 		if (unlikely(offset < 0))
 			goto out_free;
-	} else if (reserve) {
-		skb_reserve(skb, -reserve);
-		if (len < reserve)
-			skb_reset_network_header(skb);
 	}
 
 	/* Returns -EFAULT on error */
@@ -2810,7 +2797,7 @@ static int packet_snd(struct socket *sock, struct msghdr *msg, size_t len)
 
 	packet_pick_tx_queue(dev, skb);
 
-	if (has_vnet_hdr) {
+	if (po->has_vnet_hdr) {
 		if (vnet_hdr.flags & VIRTIO_NET_HDR_F_NEEDS_CSUM) {
 			u16 s = __virtio16_to_cpu(vio_le(), vnet_hdr.csum_start);
 			u16 o = __virtio16_to_cpu(vio_le(), vnet_hdr.csum_offset);
@@ -2903,7 +2890,6 @@ static int packet_release(struct socket *sock)
 
 	packet_flush_mclist(sk);
 
-	lock_sock(sk);
 	if (po->rx_ring.pg_vec) {
 		memset(&req_u, 0, sizeof(req_u));
 		packet_set_ring(sk, &req_u, 1, 0);
@@ -2913,14 +2899,12 @@ static int packet_release(struct socket *sock)
 		memset(&req_u, 0, sizeof(req_u));
 		packet_set_ring(sk, &req_u, 1, 1);
 	}
-	release_sock(sk);
 
 	f = fanout_release(sk);
 
 	synchronize_net();
 
 	if (f) {
-		kfree(po->rollover);
 		fanout_release_data(f);
 		kfree(f);
 	}
@@ -2955,14 +2939,12 @@ static int packet_do_bind(struct sock *sk, const char *name, int ifindex,
 	int ret = 0;
 	bool unlisted = false;
 
+	if (po->fanout)
+		return -EINVAL;
+
 	lock_sock(sk);
 	spin_lock(&po->bind_lock);
 	rcu_read_lock();
-
-	if (po->fanout) {
-		ret = -EINVAL;
-		goto out_unlock;
-	}
 
 	if (name) {
 		dev = dev_get_by_name_rcu(sock_net(sk), name);
@@ -2989,10 +2971,6 @@ static int packet_do_bind(struct sock *sk, const char *name, int ifindex,
 	if (need_rehook) {
 		if (po->running) {
 			rcu_read_unlock();
-			/* prevents packet_notifier() from calling
-			 * register_prot_hook()
-			 */
-			po->num = 0;
 			__unregister_prot_hook(sk, true);
 			rcu_read_lock();
 			dev_curr = po->prot_hook.dev;
@@ -3001,7 +2979,6 @@ static int packet_do_bind(struct sock *sk, const char *name, int ifindex,
 								 dev->ifindex);
 		}
 
-		BUG_ON(po->running);
 		po->num = proto;
 		po->prot_hook.type = proto;
 
@@ -3147,7 +3124,7 @@ static int packet_create(struct net *net, struct socket *sock, int protocol,
 
 	if (proto) {
 		po->prot_hook.type = proto;
-		__register_prot_hook(sk);
+		register_prot_hook(sk);
 	}
 
 	mutex_lock(&net->packet.sklist_lock);
@@ -3583,7 +3560,6 @@ packet_setsockopt(struct socket *sock, int level, int optname, char __user *optv
 		union tpacket_req_u req_u;
 		int len;
 
-		lock_sock(sk);
 		switch (po->tp_version) {
 		case TPACKET_V1:
 		case TPACKET_V2:
@@ -3594,21 +3570,14 @@ packet_setsockopt(struct socket *sock, int level, int optname, char __user *optv
 			len = sizeof(req_u.req3);
 			break;
 		}
-		if (optlen < len) {
-			ret = -EINVAL;
-		} else {
-			if (pkt_sk(sk)->has_vnet_hdr) {
-				ret = -EINVAL;
-			} else {
-				if (copy_from_user(&req_u.req, optval, len))
-					ret = -EFAULT;
-				else
-					ret = packet_set_ring(sk, &req_u, 0,
-							      optname == PACKET_TX_RING);
-			}
-		}
-		release_sock(sk);
-		return ret;
+		if (optlen < len)
+			return -EINVAL;
+		if (pkt_sk(sk)->has_vnet_hdr)
+			return -EINVAL;
+		if (copy_from_user(&req_u.req, optval, len))
+			return -EFAULT;
+		return packet_set_ring(sk, &req_u, 0,
+			optname == PACKET_TX_RING);
 	}
 	case PACKET_COPY_THRESH:
 	{
@@ -3674,18 +3643,12 @@ packet_setsockopt(struct socket *sock, int level, int optname, char __user *optv
 
 		if (optlen != sizeof(val))
 			return -EINVAL;
+		if (po->rx_ring.pg_vec || po->tx_ring.pg_vec)
+			return -EBUSY;
 		if (copy_from_user(&val, optval, sizeof(val)))
 			return -EFAULT;
-
-		lock_sock(sk);
-		if (po->rx_ring.pg_vec || po->tx_ring.pg_vec) {
-			ret = -EBUSY;
-		} else {
-			po->tp_loss = !!val;
-			ret = 0;
-		}
-		release_sock(sk);
-		return ret;
+		po->tp_loss = !!val;
+		return 0;
 	}
 	case PACKET_AUXDATA:
 	{
@@ -3696,9 +3659,7 @@ packet_setsockopt(struct socket *sock, int level, int optname, char __user *optv
 		if (copy_from_user(&val, optval, sizeof(val)))
 			return -EFAULT;
 
-		lock_sock(sk);
 		po->auxdata = !!val;
-		release_sock(sk);
 		return 0;
 	}
 	case PACKET_ORIGDEV:
@@ -3710,9 +3671,7 @@ packet_setsockopt(struct socket *sock, int level, int optname, char __user *optv
 		if (copy_from_user(&val, optval, sizeof(val)))
 			return -EFAULT;
 
-		lock_sock(sk);
 		po->origdev = !!val;
-		release_sock(sk);
 		return 0;
 	}
 	case PACKET_VNET_HDR:
@@ -3721,20 +3680,15 @@ packet_setsockopt(struct socket *sock, int level, int optname, char __user *optv
 
 		if (sock->type != SOCK_RAW)
 			return -EINVAL;
+		if (po->rx_ring.pg_vec || po->tx_ring.pg_vec)
+			return -EBUSY;
 		if (optlen < sizeof(val))
 			return -EINVAL;
 		if (copy_from_user(&val, optval, sizeof(val)))
 			return -EFAULT;
 
-		lock_sock(sk);
-		if (po->rx_ring.pg_vec || po->tx_ring.pg_vec) {
-			ret = -EBUSY;
-		} else {
-			po->has_vnet_hdr = !!val;
-			ret = 0;
-		}
-		release_sock(sk);
-		return ret;
+		po->has_vnet_hdr = !!val;
+		return 0;
 	}
 	case PACKET_TIMESTAMP:
 	{
@@ -3772,17 +3726,11 @@ packet_setsockopt(struct socket *sock, int level, int optname, char __user *optv
 
 		if (optlen != sizeof(val))
 			return -EINVAL;
+		if (po->rx_ring.pg_vec || po->tx_ring.pg_vec)
+			return -EBUSY;
 		if (copy_from_user(&val, optval, sizeof(val)))
 			return -EFAULT;
-
-		lock_sock(sk);
-		if (po->rx_ring.pg_vec || po->tx_ring.pg_vec) {
-			ret = -EBUSY;
-		} else {
-			po->tp_tx_has_off = !!val;
-			ret = 0;
-		}
-		release_sock(sk);
+		po->tp_tx_has_off = !!val;
 		return 0;
 	}
 	case PACKET_QDISC_BYPASS:
@@ -3855,8 +3803,6 @@ static int packet_getsockopt(struct socket *sock, int level, int optname,
 	case PACKET_HDRLEN:
 		if (len > sizeof(int))
 			len = sizeof(int);
-		if (len < sizeof(int))
-			return -EINVAL;
 		if (copy_from_user(&val, optval, len))
 			return -EFAULT;
 		switch (val) {
@@ -4158,6 +4104,7 @@ static int packet_set_ring(struct sock *sk, union tpacket_req_u *req_u,
 	/* Added to avoid minimal code churn */
 	struct tpacket_req *req = &req_u->req;
 
+	lock_sock(sk);
 	/* Opening a Tx-ring is NOT supported in TPACKET_V3 */
 	if (!closing && tx_ring && (po->tp_version > TPACKET_V2)) {
 		WARN(1, "Tx-ring is not supported.\n");
@@ -4176,8 +4123,6 @@ static int packet_set_ring(struct sock *sk, union tpacket_req_u *req_u,
 	}
 
 	if (req->tp_block_nr) {
-		unsigned int min_frame_size;
-
 		/* Sanity tests and some calculations */
 		err = -EBUSY;
 		if (unlikely(rb->pg_vec))
@@ -4200,12 +4145,12 @@ static int packet_set_ring(struct sock *sk, union tpacket_req_u *req_u,
 			goto out;
 		if (unlikely(!PAGE_ALIGNED(req->tp_block_size)))
 			goto out;
-		min_frame_size = po->tp_hdrlen + po->tp_reserve;
 		if (po->tp_version >= TPACKET_V3 &&
-		    req->tp_block_size <
-		    BLK_PLUS_PRIV((u64)req_u->req3.tp_sizeof_priv) + min_frame_size)
+		    req->tp_block_size <=
+			  BLK_PLUS_PRIV((u64)req_u->req3.tp_sizeof_priv))
 			goto out;
-		if (unlikely(req->tp_frame_size < min_frame_size))
+		if (unlikely(req->tp_frame_size < po->tp_hdrlen +
+					po->tp_reserve))
 			goto out;
 		if (unlikely(req->tp_frame_size & (TPACKET_ALIGNMENT - 1)))
 			goto out;
@@ -4295,6 +4240,7 @@ static int packet_set_ring(struct sock *sk, union tpacket_req_u *req_u,
 	if (pg_vec)
 		free_pg_vec(pg_vec, order, req->tp_block_nr);
 out:
+	release_sock(sk);
 	return err;
 }
 

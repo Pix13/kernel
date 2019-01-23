@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0
 config RTL8723AU
 	tristate "Realtek 8723AU USB WiFi Support"
 	depends on USB

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
 	2011.01.2  lw@rock-chips.com
 */

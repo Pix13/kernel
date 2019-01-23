@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __LINUX_CT36X__
 #define __LINUX_CT36X__
 

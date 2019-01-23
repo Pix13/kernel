@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 
 #include <linux/clk.h>
 #include <linux/crc32.h>

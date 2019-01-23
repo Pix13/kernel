@@ -48,6 +48,7 @@ struct sub_backlight {
 #define to_rockchip_backlight_device(x) \
 		container_of((x), struct rockchip_drm_backlight, pwm_pdev)
 
+static DEFINE_MUTEX(backlight_lock);
 static LIST_HEAD(backlight_list);
 
 static int compute_duty_cycle(struct rockchip_drm_backlight *bl,
@@ -250,7 +251,7 @@ int of_rockchip_drm_sub_backlight_register(struct device *dev,
 
 	pwm = devm_pwm_get(dev, NULL);
 	if (IS_ERR(pwm)) {
-		dev_dbg(dev, "unable to request PWM\n");
+		dev_err(dev, "unable to request PWM\n");
 		return PTR_ERR(pwm);
 	}
 
@@ -306,7 +307,7 @@ static int rockchip_drm_backlight_bind(struct device *dev,
 
 	drm_for_each_connector(connector, drm_dev) {
 		panel = drm_find_panel_by_connector(connector);
-		if (!panel || !panel->dev)
+		if (!panel && !panel->dev)
 			continue;
 		backlight_np = of_parse_phandle(panel->dev->of_node,
 						"backlight", 0);

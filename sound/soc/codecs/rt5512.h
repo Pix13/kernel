@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __SND_SOC_CODEC_RT5512_H
 #define __SND_SOC_CODEC_RT5512_H
 

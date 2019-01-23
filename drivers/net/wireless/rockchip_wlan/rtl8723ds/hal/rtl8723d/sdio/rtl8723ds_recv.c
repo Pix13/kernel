@@ -1,6 +1,6 @@
 /******************************************************************************
  *
- * Copyright(c) 2007 - 2017 Realtek Corporation.
+ * Copyright(c) 2007 - 2012 Realtek Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of version 2 of the GNU General Public License as
@@ -11,7 +11,12 @@
  * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
  * more details.
  *
- *****************************************************************************/
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
+ *
+ *
+ ******************************************************************************/
 #define _RTL8723DS_RECV_C_
 
 #include <rtl8723d_hal.h>
@@ -33,8 +38,9 @@ static void freerecvbuf(struct recv_buf *precvbuf)
 }
 
 #ifdef CONFIG_SDIO_RX_COPY
-s32 rtl8723ds_recv_hdl(_adapter *padapter)
+static void rtl8723ds_recv_tasklet(void *priv)
 {
+	PADAPTER			padapter;
 	PHAL_DATA_TYPE		pHalData;
 	struct recv_priv		*precvpriv;
 	struct recv_buf	*precvbuf;
@@ -45,6 +51,8 @@ s32 rtl8723ds_recv_hdl(_adapter *padapter)
 	u32	pkt_len, pkt_offset;
 	u8	rx_report_sz = 0;
 
+
+	padapter = (PADAPTER)priv;
 	pHalData = GET_HAL_DATA(padapter);
 	precvpriv = &padapter->recvpriv;
 
@@ -60,7 +68,13 @@ s32 rtl8723ds_recv_hdl(_adapter *padapter)
 			if (precvframe == NULL) {
 				RTW_INFO("%s: no enough recv frame!\n", __FUNCTION__);
 				rtw_enqueue_recvbuf_to_head(precvbuf, &precvpriv->recv_buf_pending_queue);
-				return RTW_RFRAME_UNAVAIL;
+
+				/* The case of can't allocate recvframe should be temporary, */
+				/* schedule again and hope recvframe is available next time. */
+#ifdef PLATFORM_LINUX
+				tasklet_schedule(&precvpriv->recv_tasklet);
+#endif
+				return;
 			}
 
 			/* rx desc parsing */
@@ -69,7 +83,7 @@ s32 rtl8723ds_recv_hdl(_adapter *padapter)
 			pattrib = &precvframe->u.hdr.attrib;
 
 			/* fix Hardware RX data error, drop whole recv_buffer */
-			if (!rtw_hal_rcr_check(padapter, RCR_ACRC32) && pattrib->crc_err) {
+			if ((!(pHalData->ReceiveConfig & RCR_ACRC32)) && pattrib->crc_err) {
 #if !(MP_DRIVER == 1)
 				RTW_INFO("%s()-%d: RX Warning! rx CRC ERROR !!\n", __FUNCTION__, __LINE__);
 #endif
@@ -102,7 +116,7 @@ s32 rtl8723ds_recv_hdl(_adapter *padapter)
 			} else {
 #ifdef CONFIG_RX_PACKET_APPEND_FCS
 				if (check_fwstate(&padapter->mlmepriv, WIFI_MONITOR_STATE) == _FALSE)
-					if ((pattrib->pkt_rpt_type == NORMAL_RX) && rtw_hal_rcr_check(padapter, RCR_APPFCS))
+					if ((pattrib->pkt_rpt_type == NORMAL_RX) && (pHalData->ReceiveConfig & RCR_APPFCS))
 						pattrib->pkt_len -= IEEE80211_FCS_LEN;
 #endif
 
@@ -117,7 +131,7 @@ s32 rtl8723ds_recv_hdl(_adapter *padapter)
 				ptr += RXDESC_SIZE;
 
 				/* update drv info */
-				if (rtw_hal_rcr_check(padapter, RCR_APP_BA_SSN)) {
+				if (pHalData->ReceiveConfig & RCR_APP_BA_SSN) {
 					/* rtl8723s_update_bassn(padapter, pdrvinfo); */
 					ptr += 4;
 				}
@@ -130,8 +144,14 @@ s32 rtl8723ds_recv_hdl(_adapter *padapter)
 						break;
 					}
 
-					pre_recv_entry(precvframe, pattrib->physt ? ptr : NULL);
+#ifdef CONFIG_CONCURRENT_MODE
+					pre_recv_entry(precvframe, ptr);
+#endif
 
+					if (pattrib->physt)
+						rx_query_phy_status(precvframe, ptr);
+
+					rtw_recv_entry(precvframe);
 				} else {
 #ifdef CONFIG_FW_C2H_PKT
 					if (pattrib->pkt_rpt_type == C2H_PACKET)
@@ -154,41 +174,6 @@ s32 rtl8723ds_recv_hdl(_adapter *padapter)
 		rtw_enqueue_recvbuf(precvbuf, &precvpriv->free_recv_buf_queue);
 	} while (1);
 
-#ifdef CONFIG_RTW_NAPI
-#ifdef CONFIG_RTW_NAPI_V2
-	if (padapter->registrypriv.en_napi) {
-		struct dvobj_priv *d;
-		struct _ADAPTER *a;
-		u8 i;
-
-		d = adapter_to_dvobj(padapter);
-		for (i = 0; i < d->iface_nums; i++) {
-			a = d->padapters[i];
-			if (rtw_if_up(a) == _TRUE)
-				napi_schedule(&a->napi);
-	
-		}
-	}
-#endif /* CONFIG_RTW_NAPI_V2 */
-#endif /* CONFIG_RTW_NAPI */
-	
-	return _SUCCESS;
-}
-
-static void rtl8723ds_recv_tasklet(void *priv)
-{
-	_adapter *adapter = (_adapter *)priv;
-	s32 ret;
-
-	ret = rtl8723ds_recv_hdl(adapter);
-	if (ret == RTW_RFRAME_UNAVAIL
-		|| ret == RTW_RFRAME_PKT_UNAVAIL
-	) {
-		/* schedule again and hope recvframe/packet is available next time. */
-		#ifdef PLATFORM_LINUX
-		tasklet_schedule(&adapter->recvpriv.recv_tasklet);
-		#endif
-	}
 }
 #else
 static void rtl8723ds_recv_tasklet(void *priv)
@@ -261,7 +246,7 @@ static void rtl8723ds_recv_tasklet(void *priv)
 #endif
 
 			/* fix Hardware RX data error, drop whole recv_buffer */
-			if (!rtw_hal_rcr_check(padapter, RCR_ACRC32) && pattrib->crc_err) {
+			if ((!(pHalData->ReceiveConfig & RCR_ACRC32)) && pattrib->crc_err) {
 				RTW_INFO("%s()-%d: RX Warning! rx CRC ERROR !!\n", __FUNCTION__, __LINE__);
 				rtw_free_recvframe(precvframe, &precvpriv->free_recv_queue);
 				break;
@@ -317,7 +302,7 @@ static void rtl8723ds_recv_tasklet(void *priv)
 
 #ifdef CONFIG_RX_PACKET_APPEND_FCS
 				if (check_fwstate(&padapter->mlmepriv, WIFI_MONITOR_STATE) == _FALSE) {
-					if ((pattrib->pkt_rpt_type == NORMAL_RX) && rtw_hal_rcr_check(padapter, RCR_APPFCS)) {
+					if ((pattrib->pkt_rpt_type == NORMAL_RX) && (pHalData->ReceiveConfig & RCR_APPFCS)) {
 						recvframe_pull_tail(precvframe, IEEE80211_FCS_LEN);
 						pattrib->pkt_len -= IEEE80211_FCS_LEN;
 						ppkt->len = pattrib->pkt_len;
@@ -329,14 +314,21 @@ static void rtl8723ds_recv_tasklet(void *priv)
 				ptr += RXDESC_SIZE;
 
 				/* update drv info */
-				if (rtw_hal_rcr_check(padapter, RCR_APP_BA_SSN)) {
+				if (pHalData->ReceiveConfig & RCR_APP_BA_SSN) {
 					/* rtl8723s_update_bassn(padapter, pdrvinfo); */
 					ptr += 4;
 				}
 
-				if (pattrib->pkt_rpt_type == NORMAL_RX)
-					pre_recv_entry(precvframe, pattrib->physt ? ptr : NULL);
-				else {
+				if (pattrib->pkt_rpt_type == NORMAL_RX) {
+#ifdef CONFIG_CONCURRENT_MODE
+					pre_recv_entry(precvframe, ptr);
+#endif /*CONFIG_CONCURRENT_MODE*/
+
+					if (pattrib->physt)
+						rx_query_phy_status(precvframe, ptr);
+
+					rtw_recv_entry(precvframe);
+				} else {
 #ifdef CONFIG_FW_C2H_PKT
 					if (pattrib->pkt_rpt_type == C2H_PACKET)
 						rtw_hal_c2h_pkt_pre_hdl(padapter, precvframe->u.hdr.rx_data, pattrib->pkt_len);

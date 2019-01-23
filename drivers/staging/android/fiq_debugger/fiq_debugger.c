@@ -35,7 +35,6 @@
 #include <linux/tty_flip.h>
 #include <linux/wakelock.h>
 #include <linux/ptrace.h>
-#include <linux/proc_fs.h>
 
 #ifdef CONFIG_FIQ_DEBUGGER_TRUST_ZONE
 #include <linux/rockchip/rockchip_sip.h>
@@ -431,7 +430,7 @@ static void fiq_debugger_work(struct work_struct *work)
 		cmd += 6;
 		while (*cmd == ' ')
 			cmd++;
-		if (*cmd != '\0')
+		if (cmd != '\0')
 			kernel_restart(cmd);
 		else
 			kernel_restart(NULL);
@@ -867,7 +866,8 @@ static bool fiq_debugger_handle_uart_interrupt(struct fiq_debugger_state *state,
 	int count = 0;
 	bool signal_helper = false;
 
-	if (this_cpu != state->current_cpu) {
+	if ((this_cpu != state->current_cpu) &&
+	    (cpu_online(state->current_cpu))) {
 		if (state->in_fiq)
 			return false;
 
@@ -881,9 +881,12 @@ static bool fiq_debugger_handle_uart_interrupt(struct fiq_debugger_state *state,
 			this_cpu);
 
 		atomic_set(&state->unhandled_fiq_count, 0);
-		state->current_cpu = this_cpu;
+		fiq_debugger_switch_cpu(state, this_cpu);
 		return false;
 	}
+
+	if (this_cpu != state->current_cpu)
+		state->current_cpu = this_cpu;
 
 	state->in_fiq = true;
 
@@ -1206,41 +1209,6 @@ static void fiq_tty_poll_put_char(struct tty_driver *driver, int line, char ch)
 }
 #endif
 
-#ifdef CONFIG_PROC_FS
-static int fiq_tty_proc_show(struct seq_file *m, void *v)
-{
-	struct tty_driver *driver = m->private;
-	struct fiq_debugger_state **states = driver->driver_state;
-	struct fiq_debugger_state *state;
-	int i;
-
-	seq_puts(m, "fiq-debugger driver\n");
-	for (i = 0; i < MAX_FIQ_DEBUGGER_PORTS; i++) {
-		state = states[i];
-		if (!state)
-			continue;
-
-		seq_printf(m, "%d:", i);
-		seq_printf(m, " state:%d", state->console_enable);
-		seq_putc(m, '\n');
-	}
-	return 0;
-}
-
-static int fiq_tty_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, fiq_tty_proc_show, PDE_DATA(inode));
-}
-
-static const struct file_operations fiq_tty_proc_fops = {
-	.owner		= THIS_MODULE,
-	.open		= fiq_tty_proc_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
-#endif
-
 static const struct tty_port_operations fiq_tty_port_ops;
 
 static const struct tty_operations fiq_tty_driver_ops = {
@@ -1252,9 +1220,6 @@ static const struct tty_operations fiq_tty_driver_ops = {
 	.poll_init = fiq_tty_poll_init,
 	.poll_get_char = fiq_tty_poll_get_char,
 	.poll_put_char = fiq_tty_poll_put_char,
-#endif
-#ifdef CONFIG_PROC_FS
-	.proc_fops = &fiq_tty_proc_fops,
 #endif
 };
 
@@ -1436,6 +1401,16 @@ static int fiq_debugger_probe(struct platform_device *pdev)
 	if (state->clk)
 		clk_enable(state->clk);
 
+	if (pdata->uart_init) {
+		ret = pdata->uart_init(pdev);
+		if (ret)
+			goto err_uart_init;
+	}
+
+	fiq_debugger_printf_nfiq(state,
+				"<hit enter %sto activate fiq debugger>\n",
+				state->no_sleep ? "" : "twice ");
+
 	if (fiq_debugger_have_fiq(state)) {
 #ifdef CONFIG_FIQ_GLUE
 #ifdef CONFIG_FIQ_DEBUGGER_TRUST_ZONE
@@ -1476,6 +1451,9 @@ static int fiq_debugger_probe(struct platform_device *pdev)
 		enable_irq_wake(state->uart_irq);
 	}
 
+	if (state->clk)
+		clk_disable(state->clk);
+
 	if (state->signal_irq >= 0) {
 		ret = request_irq(state->signal_irq, fiq_debugger_signal_irq,
 			  IRQF_TRIGGER_RISING, "debug-signal", state);
@@ -1507,15 +1485,6 @@ static int fiq_debugger_probe(struct platform_device *pdev)
 #ifdef CONFIG_FIQ_DEBUGGER_TRUST_ZONE
 	state_tf = state;
 #endif
-
-	if (pdata->uart_init) {
-		ret = pdata->uart_init(pdev);
-		if (ret)
-			goto err_uart_init;
-	}
-
-	if (state->clk)
-		clk_disable(state->clk);
 
 #if defined(CONFIG_FIQ_DEBUGGER_CONSOLE)
 	spin_lock_init(&state->console_lock);

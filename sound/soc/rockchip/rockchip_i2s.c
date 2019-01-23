@@ -18,7 +18,6 @@
 #include <linux/clk.h>
 #include <linux/pm_runtime.h>
 #include <linux/regmap.h>
-#include <linux/spinlock.h>
 #include <sound/pcm_params.h>
 #include <sound/dmaengine_pcm.h>
 
@@ -53,11 +52,7 @@ struct rk_i2s_dev {
 	bool is_master_mode;
 	const struct rk_i2s_pins *pins;
 	unsigned int bclk_fs;
-	unsigned int clk_trcm;
 };
-
-/* txctrl/rxctrl lock */
-static DEFINE_SPINLOCK(lock);
 
 static int i2s_runtime_suspend(struct device *dev)
 {
@@ -100,7 +95,6 @@ static void rockchip_snd_txctrl(struct rk_i2s_dev *i2s, int on)
 	unsigned int val = 0;
 	int retry = 10;
 
-	spin_lock(&lock);
 	if (on) {
 		regmap_update_bits(i2s->regmap, I2S_DMACR,
 				   I2S_DMACR_TDE_ENABLE, I2S_DMACR_TDE_ENABLE);
@@ -141,7 +135,6 @@ static void rockchip_snd_txctrl(struct rk_i2s_dev *i2s, int on)
 			}
 		}
 	}
-	spin_unlock(&lock);
 }
 
 static void rockchip_snd_rxctrl(struct rk_i2s_dev *i2s, int on)
@@ -149,7 +142,6 @@ static void rockchip_snd_rxctrl(struct rk_i2s_dev *i2s, int on)
 	unsigned int val = 0;
 	int retry = 10;
 
-	spin_lock(&lock);
 	if (on) {
 		regmap_update_bits(i2s->regmap, I2S_DMACR,
 				   I2S_DMACR_RDE_ENABLE, I2S_DMACR_RDE_ENABLE);
@@ -190,7 +182,6 @@ static void rockchip_snd_rxctrl(struct rk_i2s_dev *i2s, int on)
 			}
 		}
 	}
-	spin_unlock(&lock);
 }
 
 static int rockchip_i2s_set_fmt(struct snd_soc_dai *cpu_dai,
@@ -198,9 +189,7 @@ static int rockchip_i2s_set_fmt(struct snd_soc_dai *cpu_dai,
 {
 	struct rk_i2s_dev *i2s = to_info(cpu_dai);
 	unsigned int mask = 0, val = 0;
-	int ret = 0;
 
-	pm_runtime_get_sync(cpu_dai->dev);
 	mask = I2S_CKR_MSS_MASK;
 	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
 	case SND_SOC_DAIFMT_CBS_CFS:
@@ -213,8 +202,7 @@ static int rockchip_i2s_set_fmt(struct snd_soc_dai *cpu_dai,
 		i2s->is_master_mode = false;
 		break;
 	default:
-		ret = -EINVAL;
-		goto err_pm_put;
+		return -EINVAL;
 	}
 
 	regmap_update_bits(i2s->regmap, I2S_CKR, mask, val);
@@ -228,8 +216,7 @@ static int rockchip_i2s_set_fmt(struct snd_soc_dai *cpu_dai,
 		val = I2S_CKR_CKP_POS;
 		break;
 	default:
-		ret = -EINVAL;
-		goto err_pm_put;
+		return -EINVAL;
 	}
 
 	regmap_update_bits(i2s->regmap, I2S_CKR, mask, val);
@@ -252,8 +239,7 @@ static int rockchip_i2s_set_fmt(struct snd_soc_dai *cpu_dai,
 		val = I2S_TXCR_TFS_PCM | I2S_TXCR_PBM_MODE(1);
 		break;
 	default:
-		ret = -EINVAL;
-		goto err_pm_put;
+		return -EINVAL;
 	}
 
 	regmap_update_bits(i2s->regmap, I2S_TXCR, mask, val);
@@ -276,16 +262,12 @@ static int rockchip_i2s_set_fmt(struct snd_soc_dai *cpu_dai,
 		val = I2S_RXCR_TFS_PCM | I2S_RXCR_PBM_MODE(1);
 		break;
 	default:
-		ret = -EINVAL;
-		goto err_pm_put;
+		return -EINVAL;
 	}
 
 	regmap_update_bits(i2s->regmap, I2S_RXCR, mask, val);
 
-err_pm_put:
-	pm_runtime_put(cpu_dai->dev);
-
-	return ret;
+	return 0;
 }
 
 static int rockchip_i2s_hw_params(struct snd_pcm_substream *substream,
@@ -293,6 +275,7 @@ static int rockchip_i2s_hw_params(struct snd_pcm_substream *substream,
 				  struct snd_soc_dai *dai)
 {
 	struct rk_i2s_dev *i2s = to_info(dai);
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
 	unsigned int val = 0;
 	unsigned int mclk_rate, bclk_rate, div_bclk, div_lrck;
 
@@ -392,6 +375,13 @@ static int rockchip_i2s_hw_params(struct snd_pcm_substream *substream,
 	regmap_update_bits(i2s->regmap, I2S_DMACR, I2S_DMACR_RDL_MASK,
 			   I2S_DMACR_RDL(16));
 
+	val = I2S_CKR_TRCM_TXRX;
+	if (dai->driver->symmetric_rates && rtd->dai_link->symmetric_rates)
+		val = I2S_CKR_TRCM_TXONLY;
+
+	regmap_update_bits(i2s->regmap, I2S_CKR,
+			   I2S_CKR_TRCM_MASK,
+			   val);
 	return 0;
 }
 
@@ -481,6 +471,7 @@ static struct snd_soc_dai_driver rockchip_i2s_dai = {
 			    SNDRV_PCM_FMTBIT_S32_LE),
 	},
 	.ops = &rockchip_i2s_dai_ops,
+	.symmetric_rates = 1,
 };
 
 static const struct snd_soc_component_driver rockchip_i2s_component = {
@@ -570,14 +561,9 @@ static const struct rk_i2s_pins rk3399_i2s_pins = {
 };
 
 static const struct of_device_id rockchip_i2s_match[] = {
-	{ .compatible = "rockchip,px30-i2s", },
-	{ .compatible = "rockchip,rk3036-i2s", },
 	{ .compatible = "rockchip,rk3066-i2s", },
-	{ .compatible = "rockchip,rk3128-i2s", },
 	{ .compatible = "rockchip,rk3188-i2s", },
 	{ .compatible = "rockchip,rk3288-i2s", },
-	{ .compatible = "rockchip,rk3328-i2s", },
-	{ .compatible = "rockchip,rk3368-i2s", },
 	{ .compatible = "rockchip,rk3399-i2s", .data = &rk3399_i2s_pins },
 	{},
 };
@@ -643,11 +629,11 @@ static int rockchip_i2s_probe(struct platform_device *pdev)
 
 	i2s->playback_dma_data.addr = res->start + I2S_TXDR;
 	i2s->playback_dma_data.addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
-	i2s->playback_dma_data.maxburst = 8;
+	i2s->playback_dma_data.maxburst = 16;
 
 	i2s->capture_dma_data.addr = res->start + I2S_RXDR;
 	i2s->capture_dma_data.addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
-	i2s->capture_dma_data.maxburst = 8;
+	i2s->capture_dma_data.maxburst = 16;
 
 	dev_set_drvdata(&pdev->dev, i2s);
 
@@ -680,18 +666,6 @@ static int rockchip_i2s_probe(struct platform_device *pdev)
 			i2s->bclk_fs = val;
 	}
 
-	i2s->clk_trcm = I2S_CKR_TRCM_TXRX;
-	if (!of_property_read_u32(node, "rockchip,clk-trcm", &val)) {
-		if (val >= 0 && val <= 2) {
-			i2s->clk_trcm = val << I2S_CKR_TRCM_SHIFT;
-			if (i2s->clk_trcm)
-				soc_dai->symmetric_rates = 1;
-		}
-	}
-
-	regmap_update_bits(i2s->regmap, I2S_CKR,
-			   I2S_CKR_TRCM_MASK, i2s->clk_trcm);
-
 	ret = devm_snd_soc_register_component(&pdev->dev,
 					      &rockchip_i2s_component,
 					      soc_dai, 1);
@@ -701,8 +675,6 @@ static int rockchip_i2s_probe(struct platform_device *pdev)
 		goto err_suspend;
 	}
 
-	if (of_property_read_bool(node, "rockchip,no-dmaengine"))
-		return ret;
 	ret = devm_snd_dmaengine_pcm_register(&pdev->dev, NULL, 0);
 	if (ret) {
 		dev_err(&pdev->dev, "Could not register PCM\n");

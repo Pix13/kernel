@@ -119,15 +119,7 @@ struct cpufreq_policy {
 	bool                    fast_switch_possible;
 	bool                    fast_switch_enabled;
 
-	/*
-	 * Preferred average time interval between consecutive invocations of
-	 * the driver to set the frequency for this policy.  To be set by the
-	 * scaling driver (0, which is the default, means no preference).
-	 */
-	unsigned int		up_transition_delay_us;
-	unsigned int		down_transition_delay_us;
-
-	 /* Cached frequency lookup from cpufreq_driver_resolve_freq. */
+	/* Cached frequency lookup from cpufreq_driver_resolve_freq. */
 	unsigned int cached_target_freq;
 	int cached_resolved_idx;
 
@@ -695,53 +687,4 @@ int cpufreq_generic_init(struct cpufreq_policy *policy,
 struct sched_domain;
 unsigned long cpufreq_scale_freq_capacity(struct sched_domain *sd, int cpu);
 unsigned long cpufreq_scale_max_freq_capacity(int cpu);
-#ifdef CONFIG_ARM_ROCKCHIP_CPUFREQ
-unsigned int rockchip_cpufreq_adjust_target(int cpu, unsigned int freq);
-int rockchip_cpufreq_get_scale(int cpu);
-int rockchip_cpufreq_set_scale_rate(struct device *dev, unsigned long rate);
-int rockchip_cpufreq_set_temp_limit_rate(struct device *dev,
-					 unsigned long rate);
-int rockchip_cpufreq_check_rate_volt(struct device *dev);
-int rockchip_cpufreq_update_policy(struct device *dev);
-int rockchip_cpufreq_update_cur_volt(struct device *dev);
-#else
-static inline unsigned int rockchip_cpufreq_adjust_target(int cpu,
-							  unsigned int freq)
-{
-	return freq;
-}
-
-static inline int rockchip_cpufreq_get_scale(int cpu)
-{
-	return -EINVAL;
-}
-
-static inline int rockchip_cpufreq_set_scale_rate(struct device *dev,
-						  unsigned long rate)
-{
-	return -EINVAL;
-}
-
-static inline int rockchip_cpufreq_check_rate_volt(struct device *dev)
-{
-	return -EINVAL;
-}
-
-static inline int rockchip_cpufreq_set_temp_limit_rate(struct device *dev,
-						       unsigned long rate)
-{
-	return -EINVAL;
-}
-
-static inline int rockchip_cpufreq_update_policy(struct device *dev)
-{
-	return -EINVAL;
-}
-
-static inline int rockchip_cpufreq_update_cur_volt(struct device *dev)
-{
-	return -EINVAL;
-}
-
-#endif
 #endif /* _LINUX_CPUFREQ_H */

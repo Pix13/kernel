@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
 	2012.07.25  lby@rock-chips.com
 */

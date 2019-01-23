@@ -1,6 +1,6 @@
 /******************************************************************************
  *
- * Copyright(c) 2007 - 2017 Realtek Corporation.
+ * Copyright(c) 2007 - 2011 Realtek Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of version 2 of the GNU General Public License as
@@ -11,7 +11,12 @@
  * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
  * more details.
  *
- *****************************************************************************/
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
+ *
+ *
+ ******************************************************************************/
 #ifndef __RTL8812A_XMIT_H__
 #define __RTL8812A_XMIT_H__
 
@@ -321,7 +326,6 @@ void rtl8812a_fill_txdesc_phy(PADAPTER padapter, struct pkt_attrib *pattrib, u8 
 #if defined(CONFIG_CONCURRENT_MODE)
 void fill_txdesc_force_bmc_camid(struct pkt_attrib *pattrib, u8 *ptxdesc);
 #endif
-void fill_txdesc_bmc_tx_rate(struct pkt_attrib *pattrib, u8 *ptxdesc);
 
 #ifdef CONFIG_USB_HCI
 s32 rtl8812au_init_xmit_priv(PADAPTER padapter);
@@ -343,11 +347,6 @@ s32 rtl8812ae_hal_xmit(PADAPTER padapter, struct xmit_frame *pxmitframe);
 s32 rtl8812ae_mgnt_xmit(PADAPTER padapter, struct xmit_frame *pmgntframe);
 s32	rtl8812ae_hal_xmitframe_enqueue(_adapter *padapter, struct xmit_frame *pxmitframe);
 void rtl8812ae_xmit_tasklet(void *priv);
-
-#ifdef CONFIG_XMIT_THREAD_MODE
-s32 rtl8812ae_xmit_buf_handler(_adapter *padapter);
-#endif
-
 #endif
 
 #ifdef CONFIG_TX_EARLY_MODE

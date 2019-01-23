@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0
 config ROCK_CHIP_SOC_CAMERA
 	tristate "rockchip supported soc cameras "
 	default n

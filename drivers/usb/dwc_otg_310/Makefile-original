@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0
 #
 # Makefile for DWC_otg Highspeed USB controller driver
 #

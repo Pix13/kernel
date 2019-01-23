@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #include "aic3xxx_cfw.h"
 #include "aic3xxx_cfw_ops.h"
 #include <linux/module.h>

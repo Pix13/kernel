@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef	__PHYDMCCX_H__
 #define    __PHYDMCCX_H__
 

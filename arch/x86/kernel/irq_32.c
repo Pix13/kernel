@@ -20,7 +20,6 @@
 #include <linux/mm.h>
 
 #include <asm/apic.h>
-#include <asm/nospec-branch.h>
 
 #ifdef CONFIG_DEBUG_STACKOVERFLOW
 
@@ -56,17 +55,17 @@ DEFINE_PER_CPU(struct irq_stack *, softirq_stack);
 static void call_on_stack(void *func, void *stack)
 {
 	asm volatile("xchgl	%%ebx,%%esp	\n"
-		     CALL_NOSPEC
+		     "call	*%%edi		\n"
 		     "movl	%%ebx,%%esp	\n"
 		     : "=b" (stack)
 		     : "0" (stack),
-		       [thunk_target] "D"(func)
+		       "D"(func)
 		     : "memory", "cc", "edx", "ecx", "eax");
 }
 
 static inline void *current_stack(void)
 {
-	return (void *)(current_stack_pointer & ~(THREAD_SIZE - 1));
+	return (void *)(current_stack_pointer() & ~(THREAD_SIZE - 1));
 }
 
 static inline int execute_on_irq_stack(int overflow, struct irq_desc *desc)
@@ -90,17 +89,17 @@ static inline int execute_on_irq_stack(int overflow, struct irq_desc *desc)
 
 	/* Save the next esp at the bottom of the stack */
 	prev_esp = (u32 *)irqstk;
-	*prev_esp = current_stack_pointer;
+	*prev_esp = current_stack_pointer();
 
 	if (unlikely(overflow))
 		call_on_stack(print_stack_overflow, isp);
 
 	asm volatile("xchgl	%%ebx,%%esp	\n"
-		     CALL_NOSPEC
+		     "call	*%%edi		\n"
 		     "movl	%%ebx,%%esp	\n"
 		     : "=a" (arg1), "=b" (isp)
 		     :  "0" (desc),   "1" (isp),
-			[thunk_target] "D" (desc->handle_irq)
+			"D" (desc->handle_irq)
 		     : "memory", "cc", "ecx");
 	return 1;
 }
@@ -129,6 +128,7 @@ void irq_ctx_init(int cpu)
 	       cpu, per_cpu(hardirq_stack, cpu),  per_cpu(softirq_stack, cpu));
 }
 
+#ifndef CONFIG_PREEMPT_RT_FULL
 void do_softirq_own_stack(void)
 {
 	struct thread_info *curstk;
@@ -143,10 +143,11 @@ void do_softirq_own_stack(void)
 
 	/* Push the previous esp onto the stack */
 	prev_esp = (u32 *)irqstk;
-	*prev_esp = current_stack_pointer;
+	*prev_esp = current_stack_pointer();
 
 	call_on_stack(__do_softirq, isp);
 }
+#endif
 
 bool handle_irq(struct irq_desc *desc, struct pt_regs *regs)
 {

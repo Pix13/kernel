@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __ROCKCHIP_HDMI_V1_H__
 #define __ROCKCHIP_HDMI_V1_H__
 

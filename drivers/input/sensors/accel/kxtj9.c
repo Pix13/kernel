@@ -33,7 +33,7 @@
 
 
 #define KXTJ9_DEVID	0x09	//chip id
-#define KXTJ9_RANGE	(2 * 16384)
+#define KXTJ9_RANGE	2000000
 
 #define KXTJ9_XOUT_HPF_L                (0x00)	/* 0000 0000 */
 #define KXTJ9_XOUT_HPF_H                (0x01)	/* 0000 0001 */
@@ -186,16 +186,20 @@ static int sensor_init(struct i2c_client *client)
 	return result;
 }
 
-static short sensor_convert_data(struct i2c_client *client, char high_byte, char low_byte)
+static int sensor_convert_data(struct i2c_client *client, char high_byte, char low_byte)
 {
-	short result;
+    s64 result;
 	struct sensor_private_data *sensor =
 	    (struct sensor_private_data *) i2c_get_clientdata(client);	
 	//int precision = sensor->ops->precision;
 	switch (sensor->devid) {	
 		case KXTJ9_DEVID:		
-			result = (((short)high_byte << 8) | ((short)low_byte)) >> 4;
-			result *= KXTJ9_GRAVITY_STEP;
+			result = (((int)high_byte << 8) | ((int)low_byte ))>>4;
+			if (result < KXTJ9_BOUNDARY)
+       			result = result* KXTJ9_GRAVITY_STEP;
+    		else
+       			result = ~( ((~result & (0x7fff>>(16-KXTJ9_PRECISION)) ) + 1) 
+			   			* KXTJ9_GRAVITY_STEP) + 1;
 			break;
 
 		default:
@@ -203,7 +207,7 @@ static short sensor_convert_data(struct i2c_client *client, char high_byte, char
 			return -EFAULT;
     }
 
-	return result;
+    return (int)result;
 }
 
 static int gsensor_report_value(struct i2c_client *client, struct sensor_axis *axis)
@@ -211,13 +215,12 @@ static int gsensor_report_value(struct i2c_client *client, struct sensor_axis *a
 	struct sensor_private_data *sensor =
 		(struct sensor_private_data *) i2c_get_clientdata(client);	
 
-	if (sensor->status_cur == SENSOR_ON) {
-		/* Report acceleration sensor information */
-		input_report_abs(sensor->input_dev, ABS_X, axis->x);
-		input_report_abs(sensor->input_dev, ABS_Y, axis->y);
-		input_report_abs(sensor->input_dev, ABS_Z, axis->z);
-		input_sync(sensor->input_dev);
-	}
+	/* Report acceleration sensor information */
+	input_report_abs(sensor->input_dev, ABS_X, axis->x);
+	input_report_abs(sensor->input_dev, ABS_Y, axis->y);
+	input_report_abs(sensor->input_dev, ABS_Z, axis->z);
+	input_sync(sensor->input_dev);
+	DBG("Gsensor x==%d  y==%d z==%d\n",axis->x,axis->y,axis->z);
 
 	return 0;
 }
@@ -229,7 +232,7 @@ static int sensor_report_value(struct i2c_client *client)
 			(struct sensor_private_data *) i2c_get_clientdata(client);	
     	struct sensor_platform_data *pdata = sensor->pdata;
 	int ret = 0;
-	short x, y, z;
+	int x,y,z;
 	struct sensor_axis axis;	
 	char buffer[6] = {0};	
 	char value = 0;
@@ -261,11 +264,16 @@ static int sensor_report_value(struct i2c_client *client)
 
 	DBG( "%s: axis = %d  %d  %d \n", __func__, axis.x, axis.y, axis.z);
 
-	gsensor_report_value(client, &axis);
+	//Report event  only while value is changed to save some power
+	if((abs(sensor->axis.x - axis.x) > GSENSOR_MIN) || (abs(sensor->axis.y - axis.y) > GSENSOR_MIN) || (abs(sensor->axis.z - axis.z) > GSENSOR_MIN))
+	{
+		gsensor_report_value(client, &axis);
 
-	mutex_lock(&sensor->data_mutex);
-	sensor->axis = axis;
-	mutex_unlock(&sensor->data_mutex);
+		/* »¥³âµØ»º´æÊý¾Ý. */
+		mutex_lock(&(sensor->data_mutex) );
+		sensor->axis = axis;
+		mutex_unlock(&(sensor->data_mutex) );
+	}
 
 	if((sensor->pdata->irq_enable)&& (sensor->ops->int_status_reg >= 0))	//read sensor intterupt status register
 	{
@@ -278,21 +286,21 @@ static int sensor_report_value(struct i2c_client *client)
 }
 
 struct sensor_operate gsensor_kxtj9_ops = {
-	.name			= "kxtj9",
-	.type			= SENSOR_TYPE_ACCEL,
-	.id_i2c			= ACCEL_ID_KXTJ9,
-	.read_reg			= KXTJ9_XOUT_L,
-	.read_len			= 6,
-	.id_reg			= KXTJ9_WHO_AM_I,
-	.id_data			= KXTJ9_DEVID,
-	.precision			= KXTJ9_PRECISION,
-	.ctrl_reg			= KXTJ9_CTRL_REG1,
-	.int_status_reg	= KXTJ9_INT_REL,
-	.range			= {-32768, 32768},
-	.trig				= IRQF_TRIGGER_LOW | IRQF_ONESHOT,
-	.active			= sensor_active,
+	.name				= "kxtj9",
+	.type				= SENSOR_TYPE_ACCEL,		//sensor type and it should be correct
+	.id_i2c				= ACCEL_ID_KXTJ9,		//i2c id number
+	.read_reg			= KXTJ9_XOUT_L,			//read data
+	.read_len			= 6,				//data length
+	.id_reg				= KXTJ9_WHO_AM_I,		//read device id from this register
+	.id_data 			= KXTJ9_DEVID,			//device id
+	.precision			= KXTJ9_PRECISION,		//12 bits
+	.ctrl_reg 			= KXTJ9_CTRL_REG1,		//enable or disable 
+	.int_status_reg 		= KXTJ9_INT_REL,		//intterupt status register
+	.range				= {-KXTJ9_RANGE,KXTJ9_RANGE},	//range
+	.trig				= IRQF_TRIGGER_LOW|IRQF_ONESHOT,		
+	.active				= sensor_active,	
 	.init				= sensor_init,
-	.report			= sensor_report_value,
+	.report				= sensor_report_value,
 };
 
 /****************operate according to sensor chip:end************/

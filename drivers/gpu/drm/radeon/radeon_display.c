@@ -1374,12 +1374,6 @@ radeon_user_framebuffer_create(struct drm_device *dev,
 		return ERR_PTR(-ENOENT);
 	}
 
-	/* Handle is imported dma-buf, so cannot be migrated to VRAM for scanout */
-	if (obj->import_attach) {
-		DRM_DEBUG_KMS("Cannot create framebuffer from imported dma_buf\n");
-		return ERR_PTR(-EINVAL);
-	}
-
 	radeon_fb = kzalloc(sizeof(*radeon_fb), GFP_KERNEL);
 	if (radeon_fb == NULL) {
 		drm_gem_object_unreference_unlocked(obj);
@@ -1868,6 +1862,7 @@ int radeon_get_crtc_scanoutpos(struct drm_device *dev, unsigned int pipe,
 	struct radeon_device *rdev = dev->dev_private;
 
 	/* preempt_disable_rt() should go right here in PREEMPT_RT patchset. */
+	preempt_disable_rt();
 
 	/* Get optional system timestamp before query. */
 	if (stime)
@@ -1960,6 +1955,7 @@ int radeon_get_crtc_scanoutpos(struct drm_device *dev, unsigned int pipe,
 		*etime = ktime_get();
 
 	/* preempt_enable_rt() should go right here in PREEMPT_RT patchset. */
+	preempt_enable_rt();
 
 	/* Decode into vertical and horizontal scanout position. */
 	*vpos = position & 0x1fff;

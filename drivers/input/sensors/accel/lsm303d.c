@@ -68,7 +68,7 @@
 #define LSM303D_DEVID			(0x49)	//chip id
 #define LSM303D_ACC_DISABLE		(0x08)
 
-#define LSM303D_RANGE			32768
+#define LSM303D_RANGE			2000000
 
 /* LSM303D */
 #define LSM303D_PRECISION		16
@@ -207,7 +207,7 @@ static int sensor_init(struct i2c_client *client)
 
 static int sensor_convert_data(struct i2c_client *client, char high_byte, char low_byte)
 {
-	int result;
+	s64 result;
 	struct sensor_private_data *sensor =
 	    (struct sensor_private_data *) i2c_get_clientdata(client);
 
@@ -215,10 +215,10 @@ static int sensor_convert_data(struct i2c_client *client, char high_byte, char l
 		case LSM303D_DEVID:
 			result = ((int)high_byte << 8) | (int)low_byte;
 			if (result < LSM303D_BOUNDARY)
-				result = result * LSM303D_GRAVITY_STEP;
-			else
-				result = ~(((~result & (0x7fff >> (16 - LSM303D_PRECISION))) + 1)
-						* LSM303D_GRAVITY_STEP) + 1;
+       			result = result* LSM303D_GRAVITY_STEP;
+    		else
+       			result = ~( ((~result & (0x7fff>>(16-LSM303D_PRECISION)) ) + 1)
+			   			* LSM303D_GRAVITY_STEP) + 1;
 			break;
 
 		default:
@@ -234,13 +234,12 @@ static int gsensor_report_value(struct i2c_client *client, struct sensor_axis *a
 	struct sensor_private_data *sensor =
 		(struct sensor_private_data *) i2c_get_clientdata(client);
 
-	if (sensor->status_cur == SENSOR_ON) {
-		/* Report acceleration sensor information */
-		input_report_abs(sensor->input_dev, ABS_X, axis->x);
-		input_report_abs(sensor->input_dev, ABS_Y, axis->y);
-		input_report_abs(sensor->input_dev, ABS_Z, axis->z);
-		input_sync(sensor->input_dev);
-	}
+	/* Report acceleration sensor information */
+	input_report_abs(sensor->input_dev, ABS_X, axis->x);
+	input_report_abs(sensor->input_dev, ABS_Y, axis->y);
+	input_report_abs(sensor->input_dev, ABS_Z, axis->z);
+	input_sync(sensor->input_dev);
+	DBG("Gsensor x==%d  y==%d z==%d\n",axis->x,axis->y,axis->z);
 
 	return 0;
 }
@@ -290,11 +289,19 @@ static int sensor_report_value(struct i2c_client *client)
 	axis.y = (pdata->orientation[3])*x + (pdata->orientation[4])*y + (pdata->orientation[5])*z;
 	axis.z = (pdata->orientation[6])*x + (pdata->orientation[7])*y + (pdata->orientation[8])*z;
 
-	gsensor_report_value(client, &axis);
+	DBG( "%s: axis = %d  %d  %d \n", __func__, axis.x, axis.y, axis.z);
+	//printk( "%s: axis = %d  %d  %d \n", __func__, axis.x, axis.y, axis.z);
 
-	mutex_lock(&sensor->data_mutex);
-	sensor->axis = axis;
-	mutex_unlock(&sensor->data_mutex);
+	//Report event  only while value is changed to save some power
+	if((abs(sensor->axis.x - axis.x) > GSENSOR_MIN) || (abs(sensor->axis.y - axis.y) > GSENSOR_MIN) || (abs(sensor->axis.z - axis.z) > GSENSOR_MIN))
+	{
+		gsensor_report_value(client, &axis);
+
+		/* »¥³âµØ»º´æÊý¾Ý. */
+		mutex_lock(&(sensor->data_mutex) );
+		sensor->axis = axis;
+		mutex_unlock(&(sensor->data_mutex) );
+	}
 
 	if((sensor->pdata->irq_enable)&& (sensor->ops->int_status_reg >= 0))	//read sensor intterupt status register
 	{
@@ -307,21 +314,21 @@ static int sensor_report_value(struct i2c_client *client)
 }
 
 struct sensor_operate gsensor_lsm303d_ops = {
-	.name			= "lsm303d",
-	.type			= SENSOR_TYPE_ACCEL,
-	.id_i2c			= ACCEL_ID_LSM303D,
-	.read_reg			= (LSM303D_OUT_X_L | 0x80),
-	.read_len			= 6,
-	.id_reg			= LSM303D_WHO_AM_I,
-	.id_data			= LSM303D_DEVID,
-	.precision			= LSM303D_PRECISION,
-	.ctrl_reg			= LSM303D_CTRL_REG1,
-	.int_status_reg	= LSM303D_IG_SRC1,
-	.range			= {-LSM303D_RANGE, LSM303D_RANGE},
-	.trig				= (IRQF_TRIGGER_LOW | IRQF_ONESHOT),
-	.active			= sensor_active,
+	.name				= "lsm303d",
+	.type				= SENSOR_TYPE_ACCEL,		//sensor type and it should be correct
+	.id_i2c				= ACCEL_ID_LSM303D,		//i2c id number
+	.read_reg			= (LSM303D_OUT_X_L | 0x80),	//read data
+	.read_len			= 6,				//data length
+	.id_reg				= LSM303D_WHO_AM_I,		//read device id from this register
+	.id_data 			= LSM303D_DEVID,			//device id
+	.precision			= LSM303D_PRECISION,		//16 bits
+	.ctrl_reg 			= LSM303D_CTRL_REG1,		//enable or disable
+	.int_status_reg 		= LSM303D_IG_SRC1,		//intterupt status register
+	.range				= {-LSM303D_RANGE,LSM303D_RANGE},	//range
+	.trig				= (IRQF_TRIGGER_LOW|IRQF_ONESHOT),
+	.active				= sensor_active,
 	.init				= sensor_init,
-	.report			= sensor_report_value,
+	.report				= sensor_report_value,
 };
 
 

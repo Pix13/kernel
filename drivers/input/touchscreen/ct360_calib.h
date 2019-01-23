@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 
 struct ct36x_i2c_data {
 	unsigned char				buf[32];

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __SCALER_CORE_H__
 #define __SCALER_CORE_H__
 #include <linux/platform_device.h>

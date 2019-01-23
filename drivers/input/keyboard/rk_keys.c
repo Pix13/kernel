@@ -514,7 +514,7 @@ static int keys_resume(struct device *dev)
 		preempt_disable();
 		/* for call resend_irqs, which may call keys_isr */
 		if (local_softirq_pending())
-			do_softirq();
+			thread_do_softirq();
 		preempt_enable_no_resched();
 	}
 

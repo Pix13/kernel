@@ -887,12 +887,14 @@ static int exec_mmap(struct mm_struct *mm)
 		}
 	}
 	task_lock(tsk);
+	preempt_disable_rt();
 	active_mm = tsk->active_mm;
 	tsk->mm = mm;
 	tsk->active_mm = mm;
 	activate_mm(active_mm, mm);
 	tsk->mm->vmacache_seqnum = 0;
 	vmacache_flush(tsk);
+	preempt_enable_rt();
 	task_unlock(tsk);
 	if (old_mm) {
 		up_read(&old_mm->mmap_sem);
@@ -1079,9 +1081,9 @@ killed:
 
 char *get_task_comm(char *buf, struct task_struct *tsk)
 {
-	/* buf must be at least TASK_COMM_LEN in size */
+	/* buf must be at least sizeof(tsk->comm) in size */
 	task_lock(tsk);
-	strlcpy(buf, tsk->comm, TASK_COMM_LEN);
+	strncpy(buf, tsk->comm, sizeof(tsk->comm));
 	task_unlock(tsk);
 	return buf;
 }

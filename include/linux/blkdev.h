@@ -89,6 +89,7 @@ struct request {
 	struct list_head queuelist;
 	union {
 		struct call_single_data csd;
+		struct work_struct work;
 		unsigned long fifo_time;
 	};
 
@@ -458,7 +459,7 @@ struct request_queue {
 	struct throtl_data *td;
 #endif
 	struct rcu_head		rcu_head;
-	wait_queue_head_t	mq_freeze_wq;
+	struct swait_queue_head	mq_freeze_wq;
 	struct percpu_ref	q_usage_counter;
 	struct list_head	all_q_node;
 
@@ -885,8 +886,8 @@ static inline unsigned int blk_max_size_offset(struct request_queue *q,
 	if (!q->limits.chunk_sectors)
 		return q->limits.max_sectors;
 
-	return min(q->limits.max_sectors, (unsigned int)(q->limits.chunk_sectors -
-			(offset & (q->limits.chunk_sectors - 1))));
+	return q->limits.chunk_sectors -
+			(offset & (q->limits.chunk_sectors - 1));
 }
 
 static inline unsigned int blk_rq_get_max_sectors(struct request *rq)
@@ -1057,7 +1058,6 @@ struct blk_plug {
 	struct list_head cb_list; /* md requires an unplug callback */
 };
 #define BLK_MAX_REQUEST_COUNT 16
-#define BLK_PLUG_FLUSH_SIZE (128 * 1024)
 
 struct blk_plug_cb;
 typedef void (*blk_plug_cb_fn)(struct blk_plug_cb *, bool);
@@ -1695,26 +1695,43 @@ static const u_int64_t latency_x_axis_us[] = {
 #define BLK_IO_LAT_HIST_ZERO            2
 
 struct io_latency_state {
-	u_int64_t	latency_y_axis[ARRAY_SIZE(latency_x_axis_us) + 1];
-	u_int64_t	latency_elems;
-	u_int64_t	latency_sum;
+	u_int64_t	latency_y_axis_read[ARRAY_SIZE(latency_x_axis_us) + 1];
+	u_int64_t	latency_reads_elems;
+	u_int64_t	latency_y_axis_write[ARRAY_SIZE(latency_x_axis_us) + 1];
+	u_int64_t	latency_writes_elems;
 };
 
 static inline void
-blk_update_latency_hist(struct io_latency_state *s, u_int64_t delta_us)
+blk_update_latency_hist(struct io_latency_state *s,
+			int read,
+			u_int64_t delta_us)
 {
 	int i;
 
-	for (i = 0; i < ARRAY_SIZE(latency_x_axis_us); i++)
-		if (delta_us < (u_int64_t)latency_x_axis_us[i])
+	for (i = 0; i < ARRAY_SIZE(latency_x_axis_us); i++) {
+		if (delta_us < (u_int64_t)latency_x_axis_us[i]) {
+			if (read)
+				s->latency_y_axis_read[i]++;
+			else
+				s->latency_y_axis_write[i]++;
 			break;
-	s->latency_y_axis[i]++;
-	s->latency_elems++;
-	s->latency_sum += delta_us;
+		}
+	}
+	if (i == ARRAY_SIZE(latency_x_axis_us)) {
+		/* Overflowed the histogram */
+		if (read)
+			s->latency_y_axis_read[i]++;
+		else
+			s->latency_y_axis_write[i]++;
+	}
+	if (read)
+		s->latency_reads_elems++;
+	else
+		s->latency_writes_elems++;
 }
 
-ssize_t blk_latency_hist_show(char* name, struct io_latency_state *s,
-		char *buf, int buf_size);
+void blk_zero_latency_hist(struct io_latency_state *s);
+ssize_t blk_latency_hist_show(struct io_latency_state *s, char *buf);
 
 #else /* CONFIG_BLOCK */
 

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #include "ct36x_priv.h"
 #include <linux/of_gpio.h>
 #include <linux/async.h>

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /* rk_wifi_config.c
  *
  * RKWIFI driver version.

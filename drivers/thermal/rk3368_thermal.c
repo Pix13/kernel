@@ -27,6 +27,7 @@
 #include <linux/regmap.h>
 #include <linux/gpio.h>
 #include <linux/of_gpio.h>
+#include <linux/rockchip/common.h>
 #include <linux/reboot.h>
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
@@ -91,7 +92,6 @@ enum {
 
 #define MIN_TEMP (-40000)
 #define MAX_TEMP (125000)
-#define INVALID_TEMP INT_MAX
 
 #define BASE (1024)
 #define BASE_SHIFT (10)

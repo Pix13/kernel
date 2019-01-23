@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #if !defined(__RK_INIT__)
 #define __RK_INIT__
 

@@ -658,16 +658,7 @@ static void percpu_modcopy(struct module *mod,
 		memcpy(per_cpu_ptr(mod->percpu, cpu), from, size);
 }
 
-/**
- * is_module_percpu_address - test whether address is from module static percpu
- * @addr: address to test
- *
- * Test whether @addr belongs to module static percpu area.
- *
- * RETURNS:
- * %true if @addr is from module static percpu area
- */
-bool is_module_percpu_address(unsigned long addr)
+bool __is_module_percpu_address(unsigned long addr, unsigned long *can_addr)
 {
 	struct module *mod;
 	unsigned int cpu;
@@ -681,9 +672,11 @@ bool is_module_percpu_address(unsigned long addr)
 			continue;
 		for_each_possible_cpu(cpu) {
 			void *start = per_cpu_ptr(mod->percpu, cpu);
+			void *va = (void *)addr;
 
-			if ((void *)addr >= start &&
-			    (void *)addr < start + mod->percpu_size) {
+			if (va >= start && va < start + mod->percpu_size) {
+				if (can_addr)
+					*can_addr = (unsigned long) (va - start);
 				preempt_enable();
 				return true;
 			}
@@ -692,6 +685,20 @@ bool is_module_percpu_address(unsigned long addr)
 
 	preempt_enable();
 	return false;
+}
+
+/**
+ * is_module_percpu_address - test whether address is from module static percpu
+ * @addr: address to test
+ *
+ * Test whether @addr belongs to module static percpu area.
+ *
+ * RETURNS:
+ * %true if @addr is from module static percpu area
+ */
+bool is_module_percpu_address(unsigned long addr)
+{
+	return __is_module_percpu_address(addr, NULL);
 }
 
 #else /* ... !CONFIG_SMP */
@@ -721,6 +728,11 @@ static inline void percpu_modcopy(struct module *mod,
 	BUG_ON(size != 0);
 }
 bool is_module_percpu_address(unsigned long addr)
+{
+	return false;
+}
+
+bool __is_module_percpu_address(unsigned long addr, unsigned long *can_addr)
 {
 	return false;
 }
@@ -2851,15 +2863,6 @@ static struct module *setup_load_info(struct load_info *info, int flags)
 	return mod;
 }
 
-static void check_modinfo_retpoline(struct module *mod, struct load_info *info)
-{
-	if (retpoline_module_ok(get_modinfo(info, "retpoline")))
-		return;
-
-	pr_warn("%s: loading module not compiled with retpoline compiler.\n",
-		mod->name);
-}
-
 static int check_modinfo(struct module *mod, struct load_info *info, int flags)
 {
 	const char *modmagic = get_modinfo(info, "vermagic");
@@ -2879,14 +2882,8 @@ static int check_modinfo(struct module *mod, struct load_info *info, int flags)
 		return -ENOEXEC;
 	}
 
-	if (!get_modinfo(info, "intree")) {
-		if (!test_taint(TAINT_OOT_MODULE))
-			pr_warn("%s: loading out-of-tree module taints kernel.\n",
-				mod->name);
+	if (!get_modinfo(info, "intree"))
 		add_taint_module(mod, TAINT_OOT_MODULE, LOCKDEP_STILL_OK);
-	}
-
-	check_modinfo_retpoline(mod, info);
 
 	if (get_modinfo(info, "staging")) {
 		add_taint_module(mod, TAINT_CRAP, LOCKDEP_STILL_OK);
@@ -3051,8 +3048,6 @@ static int move_module(struct module *mod, struct load_info *info)
 
 static int check_module_license_and_versions(struct module *mod)
 {
-	int prev_taint = test_taint(TAINT_PROPRIETARY_MODULE);
-
 	/*
 	 * ndiswrapper is under GPL by itself, but loads proprietary modules.
 	 * Don't use add_taint_module(), as it would prevent ndiswrapper from
@@ -3070,9 +3065,6 @@ static int check_module_license_and_versions(struct module *mod)
 	if (strcmp(mod->name, "lve") == 0)
 		add_taint_module(mod, TAINT_PROPRIETARY_MODULE,
 				 LOCKDEP_NOW_UNRELIABLE);
-
-	if (!prev_taint && test_taint(TAINT_PROPRIETARY_MODULE))
-		pr_warn("%s: module license taints kernel.\n", mod->name);
 
 #ifdef CONFIG_MODVERSIONS
 	if ((mod->num_syms && !mod->crcs)

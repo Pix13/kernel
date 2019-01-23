@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0
 # 64-bit x86 compiler
 TARGET_FORCE_32BIT := -m32
 

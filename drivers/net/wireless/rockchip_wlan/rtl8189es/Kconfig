@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0
 config RTL8189ES
 	tristate "Realtek 8189E SDIO WiFi"
 	depends on USB

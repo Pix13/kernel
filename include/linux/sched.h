@@ -26,6 +26,7 @@ struct sched_param {
 #include <linux/nodemask.h>
 #include <linux/mm_types.h>
 #include <linux/preempt.h>
+#include <asm/kmap_types.h>
 
 #include <asm/page.h>
 #include <asm/ptrace.h>
@@ -51,7 +52,6 @@ struct sched_param {
 #include <linux/resource.h>
 #include <linux/timer.h>
 #include <linux/hrtimer.h>
-#include <linux/kcov.h>
 #include <linux/task_io_accounting.h>
 #include <linux/latencytop.h>
 #include <linux/cred.h>
@@ -186,8 +186,6 @@ extern void update_cpu_load_nohz(void);
 static inline void update_cpu_load_nohz(void) { }
 #endif
 
-extern unsigned long get_parent_ip(unsigned long addr);
-
 extern void dump_cpu_task(int cpu);
 
 struct seq_file;
@@ -223,10 +221,9 @@ extern void proc_sched_set_task(struct task_struct *p);
 #define TASK_WAKING		256
 #define TASK_PARKED		512
 #define TASK_NOLOAD		1024
-#define TASK_NEW		2048
-#define TASK_STATE_MAX		4096
+#define TASK_STATE_MAX		2048
 
-#define TASK_STATE_TO_CHAR_STR "RSDTtXZxKWPNn"
+#define TASK_STATE_TO_CHAR_STR "RSDTtXZxKWPN"
 
 extern char ___assert_task_state[1 - 2*!!(
 		sizeof(TASK_STATE_TO_CHAR_STR)-1 != ilog2(TASK_STATE_MAX)+1)];
@@ -247,10 +244,7 @@ extern char ___assert_task_state[1 - 2*!!(
 				 TASK_UNINTERRUPTIBLE | __TASK_STOPPED | \
 				 __TASK_TRACED | EXIT_ZOMBIE | EXIT_DEAD)
 
-#define task_is_traced(task)	((task->state & __TASK_TRACED) != 0)
 #define task_is_stopped(task)	((task->state & __TASK_STOPPED) != 0)
-#define task_is_stopped_or_traced(task)	\
-			((task->state & (__TASK_STOPPED | __TASK_TRACED)) != 0)
 #define task_contributes_to_load(task)	\
 				((task->state & TASK_UNINTERRUPTIBLE) != 0 && \
 				 (task->flags & PF_FROZEN) == 0 && \
@@ -315,6 +309,11 @@ extern char ___assert_task_state[1 - 2*!!(
 	smp_store_mb(current->state, (state_value))
 
 #endif
+
+#define __set_current_state_no_track(state_value)	\
+	do { current->state = (state_value); } while (0)
+#define set_current_state_no_track(state_value)		\
+	set_mb(current->state, (state_value))
 
 /* Task command name length */
 #define TASK_COMM_LEN 16
@@ -994,17 +993,26 @@ struct wake_q_node {
 struct wake_q_head {
 	struct wake_q_node *first;
 	struct wake_q_node **lastp;
-	int count;
 };
 
 #define WAKE_Q_TAIL ((struct wake_q_node *) 0x01)
 
 #define WAKE_Q(name)					\
-	struct wake_q_head name = { WAKE_Q_TAIL, &name.first, 0 }
+	struct wake_q_head name = { WAKE_Q_TAIL, &name.first }
 
 extern void wake_q_add(struct wake_q_head *head,
-		       struct task_struct *task);
-extern void wake_up_q(struct wake_q_head *head);
+			      struct task_struct *task);
+extern void __wake_up_q(struct wake_q_head *head, bool sleeper);
+
+static inline void wake_up_q(struct wake_q_head *head)
+{
+	__wake_up_q(head, false);
+}
+
+static inline void wake_up_q_sleeper(struct wake_q_head *head)
+{
+	__wake_up_q(head, true);
+}
 
 /*
  * sched-domains (multiprocessor balancing) declarations:
@@ -1434,10 +1442,6 @@ struct sched_rt_entity {
 	unsigned long watchdog_stamp;
 	unsigned int time_slice;
 
-	/* Accesses for these must be guarded by rq->lock of the task's rq */
-	bool schedtune_enqueued;
-	struct hrtimer schedtune_timer;
-
 	struct sched_rt_entity *back;
 #ifdef CONFIG_RT_GROUP_SCHED
 	struct sched_rt_entity	*parent;
@@ -1460,7 +1464,6 @@ struct sched_dl_entity {
 	u64 dl_deadline;	/* relative deadline of each instance	*/
 	u64 dl_period;		/* separation of two instances (period) */
 	u64 dl_bw;		/* dl_runtime / dl_deadline		*/
-	u64 dl_density;		/* dl_runtime / dl_deadline		*/
 
 	/*
 	 * Actual scheduling parameters. Initialized with the values above,
@@ -1544,6 +1547,7 @@ struct task_struct {
 	struct thread_info thread_info;
 #endif
 	volatile long state;	/* -1 unrunnable, 0 runnable, >0 stopped */
+	volatile long saved_state;	/* saved state for "spinlock sleepers" */
 	void *stack;
 	atomic_t usage;
 	unsigned int flags;	/* per process flags, defined below */
@@ -1575,7 +1579,6 @@ struct task_struct {
 	 * of this task
 	 */
 	u32 init_load_pct;
-	u64 last_sleep_ts;
 #endif
 
 #ifdef CONFIG_CGROUP_SCHED
@@ -1593,6 +1596,12 @@ struct task_struct {
 #endif
 
 	unsigned int policy;
+#ifdef CONFIG_PREEMPT_RT_FULL
+	int migrate_disable;
+# ifdef CONFIG_SCHED_DEBUG
+	int migrate_disable_atomic;
+# endif
+#endif
 	int nr_cpus_allowed;
 	cpumask_t cpus_allowed;
 
@@ -1702,17 +1711,16 @@ struct task_struct {
 
 	cputime_t utime, stime, utimescaled, stimescaled;
 	cputime_t gtime;
-#ifdef CONFIG_CPU_FREQ_TIMES
-	u64 *time_in_state;
-	unsigned int max_state;
-#endif
 	struct prev_cputime prev_cputime;
 #ifdef CONFIG_VIRT_CPU_ACCOUNTING_GEN
-	seqlock_t vtime_seqlock;
+	seqcount_t vtime_seqcount;
 	unsigned long long vtime_snap;
 	enum {
-		VTIME_SLEEPING = 0,
+		/* Task is sleeping or running in a CPU with VTIME inactive */
+		VTIME_INACTIVE = 0,
+		/* Task runs in userspace in a CPU with VTIME active */
 		VTIME_USER,
+		/* Task runs in kernelspace in a CPU with VTIME active */
 		VTIME_SYS,
 	} vtime_snap_whence;
 #endif
@@ -1724,6 +1732,9 @@ struct task_struct {
 
 	struct task_cputime cputime_expires;
 	struct list_head cpu_timers[3];
+#ifdef CONFIG_PREEMPT_RT_BASE
+	struct task_struct *posix_timer_list;
+#endif
 
 /* process credentials */
 	const struct cred __rcu *ptracer_cred; /* Tracer's credentials at attach */
@@ -1755,10 +1766,15 @@ struct task_struct {
 /* signal handlers */
 	struct signal_struct *signal;
 	struct sighand_struct *sighand;
+	struct sigqueue *sigqueue_cache;
 
 	sigset_t blocked, real_blocked;
 	sigset_t saved_sigmask;	/* restored if set_restore_sigmask() was used */
 	struct sigpending pending;
+#ifdef CONFIG_PREEMPT_RT_FULL
+	/* TODO: move me into ->restart_block ? */
+	struct siginfo forced_info;
+#endif
 
 	unsigned long sas_ss_sp;
 	size_t sas_ss_size;
@@ -1982,17 +1998,13 @@ struct task_struct {
 	unsigned long trace;
 	/* bitmask and counter of trace recursion */
 	unsigned long trace_recursion;
-#endif /* CONFIG_TRACING */
-#ifdef CONFIG_KCOV
-	/* Coverage collection mode enabled for this task (0 if disabled). */
-	enum kcov_mode kcov_mode;
-	/* Size of the kcov_area. */
-	unsigned	kcov_size;
-	/* Buffer for coverage collection. */
-	void		*kcov_area;
-	/* kcov desciptor wired with this task or NULL. */
-	struct kcov	*kcov;
+#ifdef CONFIG_WAKEUP_LATENCY_HIST
+	u64 preempt_timestamp_hist;
+#ifdef CONFIG_MISSED_TIMER_OFFSETS_HIST
+	long timer_offset;
 #endif
+#endif
+#endif /* CONFIG_TRACING */
 #ifdef CONFIG_MEMCG
 	struct mem_cgroup *memcg_in_oom;
 	gfp_t memcg_oom_gfp_mask;
@@ -2008,8 +2020,22 @@ struct task_struct {
 	unsigned int	sequential_io;
 	unsigned int	sequential_io_avg;
 #endif
+#ifdef CONFIG_PREEMPT_RT_BASE
+	struct rcu_head put_rcu;
+	int softirq_nestcnt;
+	unsigned int softirqs_raised;
+#endif
+#ifdef CONFIG_PREEMPT_RT_FULL
+# if defined CONFIG_HIGHMEM || defined CONFIG_X86_32
+	int kmap_idx;
+	pte_t kmap_pte[KM_TYPE_NR];
+# endif
+#endif
 #ifdef CONFIG_DEBUG_ATOMIC_SLEEP
 	unsigned long	task_state_change;
+#endif
+#ifdef CONFIG_PREEMPT_RT_FULL
+	int xmit_recursion;
 #endif
 	int pagefault_disabled;
 /* CPU-specific state of this task */
@@ -2027,9 +2053,6 @@ extern int arch_task_struct_size __read_mostly;
 #else
 # define arch_task_struct_size (sizeof(struct task_struct))
 #endif
-
-/* Future-safe accessor for struct task_struct's cpus_allowed. */
-#define tsk_cpus_allowed(tsk) (&(tsk)->cpus_allowed)
 
 #define TNF_MIGRATED	0x01
 #define TNF_NO_GROUP	0x02
@@ -2131,8 +2154,31 @@ static inline pid_t task_tgid_nr(struct task_struct *tsk)
 	return tsk->tgid;
 }
 
+pid_t task_tgid_nr_ns(struct task_struct *tsk, struct pid_namespace *ns);
+
+static inline pid_t task_tgid_vnr(struct task_struct *tsk)
+{
+	return pid_vnr(task_tgid(tsk));
+}
+
 
 static inline int pid_alive(const struct task_struct *p);
+static inline pid_t task_ppid_nr_ns(const struct task_struct *tsk, struct pid_namespace *ns)
+{
+	pid_t pid = 0;
+
+	rcu_read_lock();
+	if (pid_alive(tsk))
+		pid = task_tgid_nr_ns(rcu_dereference(tsk->real_parent), ns);
+	rcu_read_unlock();
+
+	return pid;
+}
+
+static inline pid_t task_ppid_nr(const struct task_struct *tsk)
+{
+	return task_ppid_nr_ns(tsk, &init_pid_ns);
+}
 
 static inline pid_t task_pgrp_nr_ns(struct task_struct *tsk,
 					struct pid_namespace *ns)
@@ -2155,33 +2201,6 @@ static inline pid_t task_session_nr_ns(struct task_struct *tsk,
 static inline pid_t task_session_vnr(struct task_struct *tsk)
 {
 	return __task_pid_nr_ns(tsk, PIDTYPE_SID, NULL);
-}
-
-static inline pid_t task_tgid_nr_ns(struct task_struct *tsk, struct pid_namespace *ns)
-{
-	return __task_pid_nr_ns(tsk, __PIDTYPE_TGID, ns);
-}
-
-static inline pid_t task_tgid_vnr(struct task_struct *tsk)
-{
-	return __task_pid_nr_ns(tsk, __PIDTYPE_TGID, NULL);
-}
-
-static inline pid_t task_ppid_nr_ns(const struct task_struct *tsk, struct pid_namespace *ns)
-{
-	pid_t pid = 0;
-
-	rcu_read_lock();
-	if (pid_alive(tsk))
-		pid = task_tgid_nr_ns(rcu_dereference(tsk->real_parent), ns);
-	rcu_read_unlock();
-
-	return pid;
-}
-
-static inline pid_t task_ppid_nr(const struct task_struct *tsk)
-{
-	return task_ppid_nr_ns(tsk, &init_pid_ns);
 }
 
 /* obsolete, do not use */
@@ -2224,6 +2243,15 @@ extern struct pid *cad_pid;
 extern void free_task(struct task_struct *tsk);
 #define get_task_struct(tsk) do { atomic_inc(&(tsk)->usage); } while(0)
 
+#ifdef CONFIG_PREEMPT_RT_BASE
+extern void __put_task_struct_cb(struct rcu_head *rhp);
+
+static inline void put_task_struct(struct task_struct *t)
+{
+	if (atomic_dec_and_test(&t->usage))
+		call_rcu(&t->put_rcu, __put_task_struct_cb);
+}
+#else
 extern void __put_task_struct(struct task_struct *t);
 
 static inline void put_task_struct(struct task_struct *t)
@@ -2231,6 +2259,7 @@ static inline void put_task_struct(struct task_struct *t)
 	if (atomic_dec_and_test(&t->usage))
 		__put_task_struct(t);
 }
+#endif
 
 #ifdef CONFIG_VIRT_CPU_ACCOUNTING_GEN
 extern void task_cputime(struct task_struct *t,
@@ -2269,6 +2298,7 @@ extern void thread_group_cputime_adjusted(struct task_struct *p, cputime_t *ut, 
 /*
  * Per process flags
  */
+#define PF_IN_SOFTIRQ	0x00000001	/* Task is serving softirq */
 #define PF_EXITING	0x00000004	/* getting shut down */
 #define PF_EXITPIDONE	0x00000008	/* pi exit done on shut down */
 #define PF_VCPU		0x00000010	/* I'm a virtual CPU */
@@ -2348,8 +2378,6 @@ static inline void memalloc_noio_restore(unsigned int flags)
 #define PFA_NO_NEW_PRIVS 0	/* May not gain new privileges. */
 #define PFA_SPREAD_PAGE  1      /* Spread page cache over cpuset */
 #define PFA_SPREAD_SLAB  2      /* Spread some slab caches over cpuset */
-#define PFA_SPEC_SSB_DISABLE		4	/* Speculative Store Bypass disabled */
-#define PFA_SPEC_SSB_FORCE_DISABLE	5	/* Speculative Store Bypass force disabled*/
 
 
 #define TASK_PFA_TEST(name, func)					\
@@ -2372,13 +2400,6 @@ TASK_PFA_CLEAR(SPREAD_PAGE, spread_page)
 TASK_PFA_TEST(SPREAD_SLAB, spread_slab)
 TASK_PFA_SET(SPREAD_SLAB, spread_slab)
 TASK_PFA_CLEAR(SPREAD_SLAB, spread_slab)
-
-TASK_PFA_TEST(SPEC_SSB_DISABLE, spec_ssb_disable)
-TASK_PFA_SET(SPEC_SSB_DISABLE, spec_ssb_disable)
-TASK_PFA_CLEAR(SPEC_SSB_DISABLE, spec_ssb_disable)
-
-TASK_PFA_TEST(SPEC_SSB_FORCE_DISABLE, spec_ssb_force_disable)
-TASK_PFA_SET(SPEC_SSB_FORCE_DISABLE, spec_ssb_force_disable)
 
 /*
  * task->jobctl flags
@@ -2442,6 +2463,10 @@ extern void do_set_cpus_allowed(struct task_struct *p,
 
 extern int set_cpus_allowed_ptr(struct task_struct *p,
 				const struct cpumask *new_mask);
+int migrate_me(void);
+void tell_sched_cpu_down_begin(int cpu);
+void tell_sched_cpu_down_done(int cpu);
+
 #else
 static inline void do_set_cpus_allowed(struct task_struct *p,
 				      const struct cpumask *new_mask)
@@ -2454,6 +2479,9 @@ static inline int set_cpus_allowed_ptr(struct task_struct *p,
 		return -EINVAL;
 	return 0;
 }
+static inline int migrate_me(void) { return 0; }
+static inline void tell_sched_cpu_down_begin(int cpu) { }
+static inline void tell_sched_cpu_down_done(int cpu) { }
 #endif
 
 #ifdef CONFIG_NO_HZ_COMMON
@@ -2665,6 +2693,7 @@ extern void xtime_update(unsigned long ticks);
 
 extern int wake_up_state(struct task_struct *tsk, unsigned int state);
 extern int wake_up_process(struct task_struct *tsk);
+extern int wake_up_lock_sleeper(struct task_struct * tsk);
 extern void wake_up_new_task(struct task_struct *tsk);
 #ifdef CONFIG_SMP
  extern void kick_process(struct task_struct *tsk);
@@ -2788,19 +2817,26 @@ extern struct mm_struct * mm_alloc(void);
 
 /* mmdrop drops the mm and the page tables */
 extern void __mmdrop(struct mm_struct *);
+
 static inline void mmdrop(struct mm_struct * mm)
 {
 	if (unlikely(atomic_dec_and_test(&mm->mm_count)))
 		__mmdrop(mm);
 }
 
+#ifdef CONFIG_PREEMPT_RT_BASE
+extern void __mmdrop_delayed(struct rcu_head *rhp);
+static inline void mmdrop_delayed(struct mm_struct *mm)
+{
+	if (atomic_dec_and_test(&mm->mm_count))
+		call_rcu(&mm->delayed_drop, __mmdrop_delayed);
+}
+#else
+# define mmdrop_delayed(mm)	mmdrop(mm)
+#endif
+
 /* mmput gets rid of the mappings and all user-space */
 extern void mmput(struct mm_struct *);
-/* same as above but performs the slow path from the async kontext. Can
- * be called from the atomic context as well
- */
-extern void mmput_async(struct mm_struct *);
-
 /* Grab a reference to a task's mm, if it is not already going away */
 extern struct mm_struct *get_task_mm(struct task_struct *task);
 /*
@@ -2829,14 +2865,7 @@ static inline int copy_thread_tls(
 }
 #endif
 extern void flush_thread(void);
-
-#ifdef CONFIG_HAVE_EXIT_THREAD
-extern void exit_thread(struct task_struct *tsk);
-#else
-static inline void exit_thread(struct task_struct *tsk)
-{
-}
-#endif
+extern void exit_thread(void);
 
 extern void exit_files(struct task_struct *);
 extern void __cleanup_sighand(struct sighand_struct *);
@@ -3147,6 +3176,43 @@ static inline int test_tsk_need_resched(struct task_struct *tsk)
 	return unlikely(test_tsk_thread_flag(tsk,TIF_NEED_RESCHED));
 }
 
+#ifdef CONFIG_PREEMPT_LAZY
+static inline void set_tsk_need_resched_lazy(struct task_struct *tsk)
+{
+	set_tsk_thread_flag(tsk,TIF_NEED_RESCHED_LAZY);
+}
+
+static inline void clear_tsk_need_resched_lazy(struct task_struct *tsk)
+{
+	clear_tsk_thread_flag(tsk,TIF_NEED_RESCHED_LAZY);
+}
+
+static inline int test_tsk_need_resched_lazy(struct task_struct *tsk)
+{
+	return unlikely(test_tsk_thread_flag(tsk,TIF_NEED_RESCHED_LAZY));
+}
+
+static inline int need_resched_lazy(void)
+{
+	return test_thread_flag(TIF_NEED_RESCHED_LAZY);
+}
+
+static inline int need_resched_now(void)
+{
+	return test_thread_flag(TIF_NEED_RESCHED);
+}
+
+#else
+static inline void clear_tsk_need_resched_lazy(struct task_struct *tsk) { }
+static inline int need_resched_lazy(void) { return 0; }
+
+static inline int need_resched_now(void)
+{
+	return test_thread_flag(TIF_NEED_RESCHED);
+}
+
+#endif
+
 static inline int restart_syscall(void)
 {
 	set_tsk_thread_flag(current, TIF_SIGPENDING);
@@ -3178,6 +3244,51 @@ static inline int signal_pending_state(long state, struct task_struct *p)
 	return (state & TASK_INTERRUPTIBLE) || __fatal_signal_pending(p);
 }
 
+static inline bool __task_is_stopped_or_traced(struct task_struct *task)
+{
+	if (task->state & (__TASK_STOPPED | __TASK_TRACED))
+		return true;
+#ifdef CONFIG_PREEMPT_RT_FULL
+	if (task->saved_state & (__TASK_STOPPED | __TASK_TRACED))
+		return true;
+#endif
+	return false;
+}
+
+static inline bool task_is_stopped_or_traced(struct task_struct *task)
+{
+	bool traced_stopped;
+
+#ifdef CONFIG_PREEMPT_RT_FULL
+	unsigned long flags;
+
+	raw_spin_lock_irqsave(&task->pi_lock, flags);
+	traced_stopped = __task_is_stopped_or_traced(task);
+	raw_spin_unlock_irqrestore(&task->pi_lock, flags);
+#else
+	traced_stopped = __task_is_stopped_or_traced(task);
+#endif
+	return traced_stopped;
+}
+
+static inline bool task_is_traced(struct task_struct *task)
+{
+	bool traced = false;
+
+	if (task->state & __TASK_TRACED)
+		return true;
+#ifdef CONFIG_PREEMPT_RT_FULL
+	/* in case the task is sleeping on tasklist_lock */
+	raw_spin_lock_irq(&task->pi_lock);
+	if (task->state & __TASK_TRACED)
+		traced = true;
+	else if (task->saved_state & __TASK_TRACED)
+		traced = true;
+	raw_spin_unlock_irq(&task->pi_lock);
+#endif
+	return traced;
+}
+
 /*
  * cond_resched() and cond_resched_lock(): latency reduction via
  * explicit rescheduling in places that are safe. The return
@@ -3199,12 +3310,16 @@ extern int __cond_resched_lock(spinlock_t *lock);
 	__cond_resched_lock(lock);				\
 })
 
+#ifndef CONFIG_PREEMPT_RT_FULL
 extern int __cond_resched_softirq(void);
 
 #define cond_resched_softirq() ({					\
 	___might_sleep(__FILE__, __LINE__, SOFTIRQ_DISABLE_OFFSET);	\
 	__cond_resched_softirq();					\
 })
+#else
+# define cond_resched_softirq()		cond_resched()
+#endif
 
 static inline void cond_resched_rcu(void)
 {
@@ -3369,6 +3484,31 @@ static inline void set_task_cpu(struct task_struct *p, unsigned int cpu)
 }
 
 #endif /* CONFIG_SMP */
+
+static inline int __migrate_disabled(struct task_struct *p)
+{
+#ifdef CONFIG_PREEMPT_RT_FULL
+	return p->migrate_disable;
+#else
+	return 0;
+#endif
+}
+
+/* Future-safe accessor for struct task_struct's cpus_allowed. */
+static inline const struct cpumask *tsk_cpus_allowed(struct task_struct *p)
+{
+	if (__migrate_disabled(p))
+		return cpumask_of(task_cpu(p));
+
+	return &p->cpus_allowed;
+}
+
+static inline int tsk_nr_cpus_allowed(struct task_struct *p)
+{
+	if (__migrate_disabled(p))
+		return 1;
+	return p->nr_cpus_allowed;
+}
 
 extern long sched_setaffinity(pid_t pid, const struct cpumask *new_mask);
 extern long sched_getaffinity(pid_t pid, struct cpumask *mask);

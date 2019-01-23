@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #include "mp_precomp.h"
 
 static struct	rfe_type_8821c_wifi_only	gl_rfe_type_8821c_1ant;

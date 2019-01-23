@@ -240,9 +240,9 @@ static int vpu_ion_alloc(struct vpu_iommu_session_info *session_info,
 	unsigned int heap_id_mask;
 
 	if (iommu_info->mmu_dev)
-		heap_id_mask = ION_HEAP_TYPE_SYSTEM;
+		heap_id_mask = ION_HEAP(ION_VMALLOC_HEAP_ID);
 	else
-		heap_id_mask = ION_HEAP_TYPE_DMA;
+		heap_id_mask = ION_HEAP(ION_CMA_HEAP_ID);
 
 	ion_buffer = kzalloc(sizeof(*ion_buffer), GFP_KERNEL);
 	if (!ion_buffer)

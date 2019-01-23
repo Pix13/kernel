@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #include "halmac_2_platform.h"
 #include "halmac_type.h"
 #if HALMAC_PLATFORM_WINDOWS == 1

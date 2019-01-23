@@ -1,7 +1,7 @@
 /*
  * Linux Wireless Extensions support
  *
- * Copyright (C) 1999-2017, Broadcom Corporation
+ * Copyright (C) 1999-2016, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -24,7 +24,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wl_iw.c 616333 2016-02-01 05:30:29Z $
+ * $Id: wl_iw.c 591286 2015-10-07 11:59:26Z $
  */
 
 #if defined(USE_IW)
@@ -36,10 +36,11 @@
 
 #include <bcmutils.h>
 #include <bcmendian.h>
-#include <ethernet.h>
+#include <proto/ethernet.h>
 
 #include <linux/if_arp.h>
 #include <asm/uaccess.h>
+
 #include <wlioctl.h>
 #ifdef WL_NAN
 #include <wlioctl_utils.h>
@@ -113,9 +114,7 @@ tsk_ctl_t ap_eth_ctl;  /* apsta AP netdev waiter thread */
 extern bool wl_iw_conn_status_str(uint32 event_type, uint32 status,
 	uint32 reason, char* stringBuf, uint buflen);
 
-uint wl_msg_level = WL_ERROR_VAL;
-
-#define MAX_WLIW_IOCTL_LEN WLC_IOCTL_MEDLEN
+#define MAX_WLIW_IOCTL_LEN 1024
 
 /* IOCTL swapping mode for Big Endian host with Little Endian dongle.  Default to off */
 #define htod32(i) (i)
@@ -603,9 +602,9 @@ wl_iw_set_freq(
 				fwrq->m /= 10;
 		}
 	/* handle 4.9GHz frequencies as Japan 4 GHz based channelization */
-		if (fwrq->m > 4000 && fwrq->m < 5000) {
-			sf = WF_CHAN_FACTOR_4_G; /* start factor for 4 GHz */
-		}
+	if (fwrq->m > 4000 && fwrq->m < 5000)
+		sf = WF_CHAN_FACTOR_4_G; /* start factor for 4 GHz */
+
 		chan = wf_mhz2channel(fwrq->m, sf);
 	}
 	WL_ERROR(("%s: chan=%d\n", __FUNCTION__, chan));
@@ -627,18 +626,16 @@ wl_iw_get_freq(
 	char *extra
 )
 {
+	channel_info_t ci;
 	int error;
-	u32 chanspec = 0;
-	int ctl_chan;
 
 	WL_TRACE(("%s: SIOCGIWFREQ\n", dev->name));
 
-	if ((error = dev_wlc_intvar_get(dev, "chanspec", &chanspec)))
+	if ((error = dev_wlc_ioctl(dev, WLC_GET_CHANNEL, &ci, sizeof(ci))))
 		return error;
-	ctl_chan = wf_chspec_ctlchan(chanspec);
 
 	/* Return radio channel in channel form */
-	fwrq->m = ctl_chan;
+	fwrq->m = dtoh32(ci.hw_channel);
 	fwrq->e = dtoh32(0);
 	return 0;
 }
@@ -1778,16 +1775,8 @@ wl_iw_get_essid(
 
 	ssid.SSID_len = dtoh32(ssid.SSID_len);
 
-	/* Max SSID length check */
-	if (ssid.SSID_len > IW_ESSID_MAX_SIZE) {
-		ssid.SSID_len = IW_ESSID_MAX_SIZE;
-	}
-
 	/* Get the current SSID */
 	memcpy(extra, ssid.SSID, ssid.SSID_len);
-
-	/* NULL terminating as length of extra buffer is IW_ESSID_MAX_SIZE ie 32 */
-	extra[IW_ESSID_MAX_SIZE] = '\0';
 
 	dwrq->length = ssid.SSID_len;
 
@@ -3305,7 +3294,6 @@ wl_iw_event(struct net_device *dev, wl_event_msg_t *e, void* data)
 	uint16 flags =  ntoh16(e->flags);
 	uint32 datalen = ntoh32(e->datalen);
 	uint32 status =  ntoh32(e->status);
-	uint32 reason =  ntoh32(e->reason);
 
 	memset(&wrqu, 0, sizeof(wrqu));
 	memset(extra, 0, sizeof(extra));
@@ -3335,12 +3323,12 @@ wl_iw_event(struct net_device *dev, wl_event_msg_t *e, void* data)
 		cmd = SIOCGIWAP;
 		wrqu.data.length = strlen(extra);
 		if (!(flags & WLC_EVENT_MSG_LINK)) {
-			printf("%s: Link Down with "MACSTR", reason=%d\n", __FUNCTION__,
-				MAC2STR((u8 *)wrqu.addr.sa_data), reason);
+			printf("%s: Link Down with BSSID="MACSTR"\n", __FUNCTION__,
+				MAC2STR((u8 *)wrqu.addr.sa_data));
 			bzero(wrqu.addr.sa_data, ETHER_ADDR_LEN);
 			bzero(&extra, ETHER_ADDR_LEN);
 		} else {
-			printf("%s: Link UP with "MACSTR"\n", __FUNCTION__,
+			printf("%s: Link UP with BSSID="MACSTR"\n", __FUNCTION__,
 				MAC2STR((u8 *)wrqu.addr.sa_data));
 		}
 		break;
@@ -3547,19 +3535,15 @@ int wl_iw_get_wireless_stats(struct net_device *dev, struct iw_statistics *wstat
 #endif /* WIRELESS_EXT > 11 */
 
 	phy_noise = 0;
-	if ((res = dev_wlc_ioctl(dev, WLC_GET_PHY_NOISE, &phy_noise, sizeof(phy_noise)))) {
-		WL_ERROR(("%s: WLC_GET_PHY_NOISE error=%d\n", __FUNCTION__, res));
+	if ((res = dev_wlc_ioctl(dev, WLC_GET_PHY_NOISE, &phy_noise, sizeof(phy_noise))))
 		goto done;
-	}
 
 	phy_noise = dtoh32(phy_noise);
 	WL_TRACE(("wl_iw_get_wireless_stats phy noise=%d\n *****", phy_noise));
 
-	memset(&scb_val, 0, sizeof(scb_val));
-	if ((res = dev_wlc_ioctl(dev, WLC_GET_RSSI, &scb_val, sizeof(scb_val_t)))) {
-		WL_ERROR(("%s: WLC_GET_RSSI error=%d\n", __FUNCTION__, res));
+	scb_val.val = 0;
+	if ((res = dev_wlc_ioctl(dev, WLC_GET_RSSI, &scb_val, sizeof(scb_val_t))))
 		goto done;
-	}
 
 	rssi = dtoh32(scb_val.val);
 	rssi = MIN(rssi, RSSI_MAXVAL);
@@ -3587,16 +3571,24 @@ int wl_iw_get_wireless_stats(struct net_device *dev, struct iw_statistics *wstat
 #endif /* WIRELESS_EXT > 18 */
 
 #if WIRELESS_EXT > 11
-	WL_TRACE(("wl_iw_get_wireless_stats counters\n *****"));
+	WL_TRACE(("wl_iw_get_wireless_stats counters=%d\n *****", WL_CNTBUF_MAX_SIZE));
 
-	cntbuf = kmalloc(MAX_WLIW_IOCTL_LEN, GFP_KERNEL);
+	if (WL_CNTBUF_MAX_SIZE > MAX_WLIW_IOCTL_LEN)
+	{
+		WL_ERROR(("wl_iw_get_wireless_stats buffer too short %d < %d\n",
+			WL_CNTBUF_MAX_SIZE, MAX_WLIW_IOCTL_LEN));
+		res = BCME_BUFTOOSHORT;
+		goto done;
+	}
+
+	cntbuf = kmalloc(WL_CNTBUF_MAX_SIZE, GFP_KERNEL);
 	if (!cntbuf) {
 		res = BCME_NOMEM;
 		goto done;
 	}
 
-	memset(cntbuf, 0, MAX_WLIW_IOCTL_LEN);
-	res = dev_wlc_bufvar_get(dev, "counters", cntbuf, MAX_WLIW_IOCTL_LEN);
+	memset(cntbuf, 0, WL_CNTBUF_MAX_SIZE);
+	res = dev_wlc_bufvar_get(dev, "counters", cntbuf, WL_CNTBUF_MAX_SIZE);
 	if (res)
 	{
 		WL_ERROR(("wl_iw_get_wireless_stats counters failed error=%d ****** \n", res));
@@ -3607,9 +3599,6 @@ int wl_iw_get_wireless_stats(struct net_device *dev, struct iw_statistics *wstat
 	cntinfo->version = dtoh16(cntinfo->version);
 	cntinfo->datalen = dtoh16(cntinfo->datalen);
 	ver = cntinfo->version;
-#ifdef WL_NAN
-	CHK_CNTBUF_DATALEN(cntbuf, MAX_WLIW_IOCTL_LEN);
-#endif
 	if (ver > WL_CNT_T_VERSION) {
 		WL_TRACE(("\tIncorrect version of counters struct: expected %d; got %d\n",
 			WL_CNT_T_VERSION, ver));
@@ -3629,7 +3618,7 @@ int wl_iw_get_wireless_stats(struct net_device *dev, struct iw_statistics *wstat
 	}
 
 #ifdef WL_NAN
-	res = wl_cntbuf_to_xtlv_format(NULL, cntinfo, MAX_WLIW_IOCTL_LEN, corerev);
+	res = wl_cntbuf_to_xtlv_format(NULL, cntinfo, WL_CNTBUF_MAX_SIZE, corerev);
 	if (res) {
 		WL_ERROR(("%s: wl_cntbuf_to_xtlv_format failed %d\n", __FUNCTION__, res));
 		goto done;
@@ -3653,19 +3642,9 @@ done:
 
 #ifndef WL_ESCAN
 static void
-wl_iw_timerfunc(
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0)
-	struct timer_list *t
-#else
-	unsigned long data
-#endif
-)
+wl_iw_timerfunc(ulong data)
 {
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0)
-	iscan_info_t *iscan = from_timer(iscan, t, timer);
-#else
 	iscan_info_t *iscan = (iscan_info_t *)data;
-#endif
 	iscan->timer_on = 0;
 	if (iscan->iscan_state != ISCAN_STATE_IDLE) {
 		WL_TRACE(("timer trigger\n"));
@@ -3903,13 +3882,9 @@ wl_iw_attach(struct net_device *dev, void * dhdp)
 
 	/* Set up the timer */
 	iscan->timer_ms    = 2000;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0)
-	timer_setup(&iscan->timer, wl_iw_timerfunc, 0);
-#else
 	init_timer(&iscan->timer);
 	iscan->timer.data = (ulong)iscan;
 	iscan->timer.function = wl_iw_timerfunc;
-#endif
 
 	sema_init(&iscan->sysioc_sem, 0);
 	init_completion(&iscan->sysioc_exited);

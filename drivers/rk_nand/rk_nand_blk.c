@@ -30,7 +30,6 @@
 #include <linux/kthread.h>
 #include <linux/proc_fs.h>
 #include <linux/version.h>
-#include <linux/soc/rockchip/rk_vendor_storage.h>
 
 #include "rk_nand_blk.h"
 #include "rk_ftl_api.h"
@@ -182,6 +181,10 @@ static int nand_dev_transfer(struct nand_blk_dev *dev,
 	return ret;
 }
 
+void rknand_queue_cond_resched(void)
+{
+};
+
 static DECLARE_WAIT_QUEUE_HEAD(rknand_thread_wait);
 static void rk_ftl_gc_timeout_hack(unsigned long data);
 static DEFINE_TIMER(rk_ftl_gc_timeout, rk_ftl_gc_timeout_hack, 0, 0);
@@ -204,13 +207,16 @@ static int req_check_buffer_align(struct request *req, char **pbuf)
 	char *buffer;
 	void *firstbuf = 0;
 	char *nextbuffer = 0;
+	unsigned long block, nsect;
 
+	block = blk_rq_pos(req);
+	nsect = blk_rq_cur_bytes(req) >> 9;
 	rq_for_each_segment(bv, req, iter) {
 		buffer = page_address(bv.bv_page) + bv.bv_offset;
-		if (!firstbuf)
+		if (firstbuf == 0)
 			firstbuf = buffer;
 		nr_vec++;
-		if (nextbuffer && nextbuffer != buffer)
+		if (nextbuffer != 0 && nextbuffer != buffer)
 			return 0;
 		nextbuffer = buffer + bv.bv_len;
 	}
@@ -234,7 +240,7 @@ static int nand_blktrans_thread(void *arg)
 	int req_empty_times = 0;
 
 	spin_lock_irq(rq->queue_lock);
-	rk_ftl_gc_jiffies = HZ / 10; /* do garbage collect after 100ms */
+	rk_ftl_gc_jiffies = HZ * 5;
 	rk_ftl_gc_do = 0;
 	rk_ftl_gc_timeout.expires = jiffies + rk_ftl_gc_jiffies;
 	add_timer(&rk_ftl_gc_timeout);
@@ -254,9 +260,14 @@ static int nand_blktrans_thread(void *arg)
 				ftl_gc_status = rk_ftl_garbage_collect(1, 0);
 				rknand_device_unlock();
 				rk_ftl_gc_jiffies = HZ / 50;
-				if (ftl_gc_status == 0)
+				if (ftl_gc_status == 0) {
 					rk_ftl_gc_jiffies = 1 * HZ;
-
+				} else if (ftl_gc_status < 8) {
+					spin_lock_irq(rq->queue_lock);
+					remove_wait_queue(&nandr->thread_wq,
+							  &wait);
+					continue;
+				}
 			} else {
 				rk_ftl_gc_jiffies = HZ / 50;
 			}
@@ -427,7 +438,7 @@ static int rknand_get_part(char *parts,
 		char *p;
 
 		p = strchr(parts + 1, delim);
-		if (!p)
+		if (p == 0)
 			return 0;
 		strncpy(name, parts + 1, p - (parts + 1));
 		parts = p + 1;
@@ -461,10 +472,7 @@ static int nand_prase_cmdline_part(struct nand_part *pdisk_part)
 	unsigned int cap_size = rk_ftl_get_capacity();
 	char *cmdline;
 
-	cmdline = strstr(saved_command_line, "mtdparts=");
-	if (!cmdline)
-		return 0;
-	cmdline += 9;
+	cmdline = strstr(saved_command_line, "mtdparts=") + 9;
 	if (!memcmp(cmdline, "rk29xxnand:", strlen("rk29xxnand:"))) {
 		pbuf = cmdline + strlen("rk29xxnand:");
 		rknand_get_part(pbuf, pdisk_part, &part_num);
@@ -477,9 +485,8 @@ static int nand_prase_cmdline_part(struct nand_part *pdisk_part)
 				> cap_size) {
 				pdisk_part[i].size = cap_size -
 					pdisk_part[i].offset;
-				pr_err("partition error....max cap:%x\n",
-					cap_size);
-				if (!pdisk_part[i].size)
+				pr_err("partition config error....\n");
+				if (pdisk_part[i].size)
 					return i;
 				else
 					return (i + 1);
@@ -575,25 +582,21 @@ static int nand_add_dev(struct nand_blk_ops *nandr, struct nand_part *part)
 
 	gd->major = nandr->major;
 	gd->first_minor = (dev->devnum) << nandr->minorbits;
-
 	gd->fops = &nand_blktrans_ops;
 
-	if (part->name[0]) {
+	if (part->name[0])
 		snprintf(gd->disk_name,
 			 sizeof(gd->disk_name),
 			 "%s_%s",
 			 nandr->name,
 			 part->name);
-	} else {
-		gd->flags = GENHD_FL_EXT_DEVT;
-		gd->driverfs_dev = g_nand_device;
-		gd->minors = 255;
+	else
 		snprintf(gd->disk_name,
 			 sizeof(gd->disk_name),
 			 "%s%d",
 			 nandr->name,
 			 dev->devnum);
-	}
+
 	set_capacity(gd, dev->size);
 
 	gd->private_data = dev;
@@ -633,14 +636,21 @@ static int nand_remove_dev(struct nand_blk_dev *dev)
 
 int nand_blk_add_whole_disk(void)
 {
+	struct nand_part part;
+
+	part.offset = 0;
+	part.size = rk_ftl_get_capacity();
+	part.type = 0;
+	memcpy(part.name, "rknand", sizeof("rknand"));
+	nand_add_dev(&mytr, &part);
 	return 0;
 }
 
 static int nand_blk_register(struct nand_blk_ops *nandr)
 {
+	struct task_struct *tsk;
 	int i, ret;
-	u32 part_size;
-	struct nand_part part;
+	int offset;
 
 	rk_nand_schedule_enable_config(1);
 	nandr->quit = 0;
@@ -672,40 +682,22 @@ static int nand_blk_register(struct nand_blk_ops *nandr)
 
 	nandr->rq->queuedata = nandr;
 	INIT_LIST_HEAD(&nandr->devs);
-	kthread_run(nand_blktrans_thread, (void *)nandr, "rknand");
+	tsk = kthread_run(nand_blktrans_thread, (void *)nandr, "rknand");
 
 	g_max_part_num = nand_prase_cmdline_part(disk_array);
-
+	offset = 0;
 	nandr->last_dev_index = 0;
-	part.offset = 0;
-	part.size = rk_ftl_get_capacity();
-	part.type = 0;
-	part.name[0] = 0;
-	nand_add_dev(&mytr, &part);
-
-	if (g_max_part_num) {
-		for (i = 0; i < g_max_part_num; i++) {
-			part_size = (disk_array[i].offset + disk_array[i].size);
-			pr_info("%10s: 0x%09llx -- 0x%09llx (%llu MB)\n",
-				disk_array[i].name,
-				(u64)disk_array[i].offset * 512,
-				(u64)part_size * 512,
-				(u64)disk_array[i].size / 2048);
-			nand_add_dev(nandr, &disk_array[i]);
-		}
+	for (i = 0; i < g_max_part_num; i++) {
+		pr_info("%10s: 0x%09llx -- 0x%09llx (%llu MB)\n",
+			disk_array[i].name,
+			(u64)disk_array[i].offset * 512,
+			(u64)(disk_array[i].offset + disk_array[i].size) * 512,
+			(u64)disk_array[i].size / 2048);
+		nand_add_dev(nandr, &disk_array[i]);
 	}
 
 	rknand_create_procfs();
 	rk_ftl_storage_sys_init();
-
-	ret = rk_ftl_vendor_storage_init();
-	if (!ret) {
-		rk_vendor_register(rk_ftl_vendor_read, rk_ftl_vendor_write);
-		rknand_vendor_storage_init();
-		pr_info("rknand vendor storage init ok !\n");
-	} else {
-		pr_info("rknand vendor storage init failed !\n");
-	}
 
 	return 0;
 }
@@ -714,8 +706,6 @@ static void nand_blk_unregister(struct nand_blk_ops *nandr)
 {
 	struct list_head *this, *next;
 
-	if (!rk_nand_dev_initialised)
-		return;
 	nandr->quit = 1;
 	wake_up(&nandr->thread_wq);
 	wait_for_completion(&nandr->thread_exit);
@@ -731,8 +721,6 @@ static void nand_blk_unregister(struct nand_blk_ops *nandr)
 
 void rknand_dev_flush(void)
 {
-	if (!rk_nand_dev_initialised)
-		return;
 	rknand_device_lock();
 	rk_ftl_cache_write_back();
 	rknand_device_unlock();
@@ -746,7 +734,7 @@ int __init rknand_dev_init(void)
 	void __iomem *nandc1;
 
 	rknand_get_reg_addr((unsigned long *)&nandc0, (unsigned long *)&nandc1);
-	if (!nandc0)
+	if (nandc0 == 0)
 		return -1;
 
 	ret = rk_ftl_init();
@@ -767,23 +755,21 @@ int __init rknand_dev_init(void)
 
 int rknand_dev_exit(void)
 {
-	if (!rk_nand_dev_initialised)
-		return -1;
-	rk_nand_dev_initialised = 0;
-	if (rknand_device_trylock()) {
-		rk_ftl_cache_write_back();
-		rknand_device_unlock();
+	if (rk_nand_dev_initialised) {
+		rk_nand_dev_initialised = 0;
+		if (rknand_device_trylock()) {
+			rk_ftl_cache_write_back();
+			rknand_device_unlock();
+		}
+		nand_blk_unregister(&mytr);
+		rk_ftl_de_init();
+		pr_info("nand_blk_dev_exit:OK\n");
 	}
-	nand_blk_unregister(&mytr);
-	rk_ftl_de_init();
-	pr_info("nand_blk_dev_exit:OK\n");
 	return 0;
 }
 
 void rknand_dev_suspend(void)
 {
-	if (!rk_nand_dev_initialised)
-		return;
 	pr_info("rk_nand_suspend\n");
 	rk_nand_schedule_enable_config(0);
 	rknand_device_lock();
@@ -792,8 +778,6 @@ void rknand_dev_suspend(void)
 
 void rknand_dev_resume(void)
 {
-	if (!rk_nand_dev_initialised)
-		return;
 	pr_info("rk_nand_resume\n");
 	rk_nand_resume();
 	rknand_device_unlock();
@@ -803,8 +787,6 @@ void rknand_dev_resume(void)
 void rknand_dev_shutdown(void)
 {
 	pr_info("rknand_shutdown...\n");
-	if (!rk_nand_dev_initialised)
-		return;
 	if (mytr.quit == 0) {
 		mytr.quit = 1;
 		wake_up(&mytr.thread_wq);
@@ -813,3 +795,4 @@ void rknand_dev_shutdown(void)
 	}
 	pr_info("rknand_shutdown:OK\n");
 }
+

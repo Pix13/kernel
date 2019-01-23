@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #include <linux/ctype.h>
 #include <linux/string.h>
 #include <linux/display-sys.h>

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 
 enum rk_board_id{
 	BOARD_ID_INVALID = -1,

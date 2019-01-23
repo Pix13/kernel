@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifdef DWC_NOTIFYLIB
 
 #include "dwc_notifier.h"

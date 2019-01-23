@@ -58,6 +58,7 @@ static const struct reg_sequence init_list[] = {
 	{RT5640_PR_BASE + 0x20,	0x6110},
 	{RT5640_PR_BASE + 0x21,	0xe0e0},
 	{RT5640_PR_BASE + 0x23,	0x1804},
+	{RT5640_GPIO_CTRL1, 0x4400},
 };
 
 static const struct reg_default rt5640_reg[] = {
@@ -2063,13 +2064,17 @@ static int rt5640_probe(struct snd_soc_codec *codec)
 {
 	struct snd_soc_dapm_context *dapm = snd_soc_codec_get_dapm(codec);
 	struct rt5640_priv *rt5640 = snd_soc_codec_get_drvdata(codec);
-
+	int ret;
 	/* Check if MCLK provided */
 	rt5640->mclk = devm_clk_get(codec->dev, "mclk");
 	if (PTR_ERR(rt5640->mclk) == -EPROBE_DEFER)
 		return -EPROBE_DEFER;
 
 	rt5640->codec = codec;
+	ret = clk_prepare_enable(rt5640->mclk);
+	clk_set_rate(rt5640->mclk, 11289600);
+	if (ret)
+		return ret;		
 
 	snd_soc_codec_force_bias_level(codec, SND_SOC_BIAS_OFF);
 
@@ -2383,7 +2388,7 @@ static struct i2c_driver rt5640_i2c_driver = {
 	.driver = {
 		.name = "rt5640",
 		.acpi_match_table = ACPI_PTR(rt5640_acpi_match),
-		.of_match_table = of_match_ptr(rt5640_of_match),
+		//.of_match_table = of_match_ptr(rt5640_of_match),
 	},
 	.probe = rt5640_i2c_probe,
 	.remove   = rt5640_i2c_remove,

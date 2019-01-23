@@ -66,6 +66,9 @@ struct trace_entry {
 	unsigned char		flags;
 	unsigned char		preempt_count;
 	int			pid;
+	unsigned short		migrate_disable;
+	unsigned short		padding;
+	unsigned char		preempt_lazy_count;
 };
 
 #define TRACE_EVENT_TYPE_MAX						\
@@ -301,7 +304,6 @@ struct trace_event_call {
 	int				perf_refcount;
 	struct hlist_head __percpu	*perf_events;
 	struct bpf_prog			*prog;
-	struct perf_event		*bpf_prog_owner;
 
 	int	(*perf_perm)(struct trace_event_call *,
 			     struct perf_event *);

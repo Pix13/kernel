@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /****************************************************************************************
  * driver/input/touchscreen/hannstar_Synaptics.c
  *Copyright 	:ROCKCHIP  Inc

@@ -30,14 +30,7 @@ $(warning LSE atomics not supported by binutils)
   endif
 endif
 
-ifeq ($(cc-name),clang)
-# This is a workaround for https://bugs.llvm.org/show_bug.cgi?id=30792.
-# TODO: revert when this is fixed in LLVM.
-KBUILD_CFLAGS	+= -mno-implicit-float
-else
-KBUILD_CFLAGS	+= -mgeneral-regs-only
-endif
-KBUILD_CFLAGS	+= $(lseinstr)
+KBUILD_CFLAGS	+= -mgeneral-regs-only $(lseinstr)
 KBUILD_CFLAGS	+= -fno-pic
 KBUILD_CFLAGS	+= $(call cc-option, -mpc-relative-literal-loads)
 KBUILD_CFLAGS	+= -fno-asynchronous-unwind-tables
@@ -73,10 +66,6 @@ TEXT_OFFSET := $(shell awk "BEGIN {srand(); printf \"0x%06x\n\", \
 		 rand()) * (2 ^ $(CONFIG_ARM64_PAGE_SHIFT))}")
 else
 TEXT_OFFSET := 0x00080000
-endif
-
-ifeq ($(cc-name),clang)
-KBUILD_CFLAGS += $(call cc-disable-warning, asm-operand-widths)
 endif
 
 # KASAN_SHADOW_OFFSET = VA_START + (1 << (VA_BITS - 3)) - (1 << 61)
@@ -163,31 +152,14 @@ define archhelp
   echo  '                  install to $$(INSTALL_PATH) and run lilo'
 endef
 
-kernel.img: Image.lz4
-	$(Q)scripts/mkkrnlimg $(objtree)/arch/arm64/boot/Image $(objtree)/kernel.img >/dev/null
+kernel.img: Image
+	$(Q)$(srctree)/scripts/mkkrnlimg $(objtree)/arch/arm64/boot/Image $(objtree)/kernel.img >/dev/null
 	@echo '  Image:  kernel.img is ready'
-ifdef CONFIG_MODULES
-	$(Q)if [ "$(srctree)" = "$(objtree)" ]; then $(MAKE) modules; fi
-endif
 
 LOGO := $(notdir $(wildcard $(srctree)/logo.bmp))
 LOGO_KERNEL := $(notdir $(wildcard $(srctree)/logo_kernel.bmp))
 %.img: rockchip/%.dtb kernel.img $(LOGO) $(LOGO_KERNEL)
 	$(Q) if [ -f $(srctree)/$(LOGO) -a "$(srctree)" != "$(objtree)" ]; then cp -a $(srctree)/$(LOGO) $(objtree)/; fi
 	$(Q) if [ -f $(srctree)/$(LOGO_KERNEL) -a "$(srctree)" != "$(objtree)" ]; then cp -a $(srctree)/$(LOGO_KERNEL) $(objtree)/; fi
-	$(Q)scripts/resource_tool $(objtree)/arch/arm64/boot/dts/rockchip/$*.dtb $(LOGO) $(LOGO_KERNEL)
+	$(Q)$(srctree)/scripts/resource_tool $(objtree)/arch/arm64/boot/dts/rockchip/$*.dtb $(LOGO) $(LOGO_KERNEL)
 	@echo '  Image:  resource.img (with $*.dtb $(LOGO) $(LOGO_KERNEL)) is ready'
-	$(Q) if [ -x $(srctree)/scripts/mkbootimg ]; then \
-		$(srctree)/scripts/mkbootimg \
-			--kernel $(objtree)/arch/arm64/boot/Image \
-			--second resource.img \
-			-o boot.img && \
-		echo '  Image:  boot.img (with Image resource.img) is ready'; \
-		$(srctree)/scripts/mkbootimg \
-			--kernel $(objtree)/arch/arm64/boot/Image.lz4 \
-			--second resource.img \
-			-o zboot.img && \
-		echo '  Image:  zboot.img (with Image.lz4 resource.img) is ready'; \
-	fi
-
-CLEAN_FILES += boot.img kernel.img resource.img zboot.img

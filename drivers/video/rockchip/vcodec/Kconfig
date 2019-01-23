@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0
 menu "VCODEC"
 	depends on ARCH_ROCKCHIP
 

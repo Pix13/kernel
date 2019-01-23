@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #define SUPPORT_ION 
 #define PVR_ANDROID_ION_HEADER "../drivers/staging/android/ion/ion.h"
 #define PVR_ANDROID_ION_PRIV_HEADER "../drivers/staging/android/ion/ion_priv.h"

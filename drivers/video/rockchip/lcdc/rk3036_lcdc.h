@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _RK3036_LCDC_H_
 #define _RK3036_LCDC_H_
 

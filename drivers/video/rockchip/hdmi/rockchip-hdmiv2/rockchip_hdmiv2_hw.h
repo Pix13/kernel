@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _RK3288_HDMI_HW_H
 #define _RK3288_HDMI_HW_H
 #include <linux/interrupt.h>

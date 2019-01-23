@@ -58,7 +58,6 @@
 #include <linux/tsacct_kern.h>
 #include <linux/cn_proc.h>
 #include <linux/freezer.h>
-#include <linux/kaiser.h>
 #include <linux/delayacct.h>
 #include <linux/taskstats_kern.h>
 #include <linux/random.h>
@@ -76,8 +75,6 @@
 #include <linux/aio.h>
 #include <linux/compiler.h>
 #include <linux/sysctl.h>
-#include <linux/kcov.h>
-#include <linux/cpufreq_times.h>
 
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
@@ -111,7 +108,7 @@ int max_threads;		/* tunable limit on nr_threads */
 
 DEFINE_PER_CPU(unsigned long, process_counts) = 0;
 
-__cacheline_aligned DEFINE_RWLOCK(tasklist_lock);  /* outer */
+DEFINE_RWLOCK(tasklist_lock);  /* outer */
 
 #ifdef CONFIG_PROVE_RCU
 int lockdep_tasklist_lock_is_held(void)
@@ -174,19 +171,18 @@ static inline void free_thread_stack(unsigned long *stack)
 {
 	struct page *page = virt_to_page(stack);
 
-	kaiser_unmap_thread_stack(stack);
 	__free_kmem_pages(page, THREAD_SIZE_ORDER);
 }
 # else
 static struct kmem_cache *thread_stack_cache;
 
-static unsigned long *alloc_thread_stack_node(struct task_struct *tsk,
+static struct thread_info *alloc_thread_stack_node(struct task_struct *tsk,
 						  int node)
 {
 	return kmem_cache_alloc_node(thread_stack_cache, THREADINFO_GFP, node);
 }
 
-static void free_thread_stack(unsigned long *stack)
+static void free_stack(unsigned long *stack)
 {
 	kmem_cache_free(thread_stack_cache, stack);
 }
@@ -227,7 +223,6 @@ static void account_kernel_stack(unsigned long *stack, int account)
 
 void free_task(struct task_struct *tsk)
 {
-	cpufreq_task_times_exit(tsk);
 	account_kernel_stack(tsk->stack, -1);
 	arch_release_thread_stack(tsk->stack);
 	free_thread_stack(tsk->stack);
@@ -251,7 +246,9 @@ static inline void put_signal_struct(struct signal_struct *sig)
 	if (atomic_dec_and_test(&sig->sigcnt))
 		free_signal_struct(sig);
 }
-
+#ifdef CONFIG_PREEMPT_RT_BASE
+static
+#endif
 void __put_task_struct(struct task_struct *tsk)
 {
 	WARN_ON(!tsk->exit_state);
@@ -268,7 +265,18 @@ void __put_task_struct(struct task_struct *tsk)
 	if (!profile_handoff_task(tsk))
 		free_task(tsk);
 }
+#ifndef CONFIG_PREEMPT_RT_BASE
 EXPORT_SYMBOL_GPL(__put_task_struct);
+#else
+void __put_task_struct_cb(struct rcu_head *rhp)
+{
+	struct task_struct *tsk = container_of(rhp, struct task_struct, put_rcu);
+
+	__put_task_struct(tsk);
+
+}
+EXPORT_SYMBOL_GPL(__put_task_struct_cb);
+#endif
 
 void __init __weak arch_task_cache_init(void) { }
 
@@ -359,10 +367,6 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 		goto free_stack;
 
 	tsk->stack = stack;
-
-	err = kaiser_map_thread_stack(tsk->stack);
-	if (err)
-		goto free_stack;
 #ifdef CONFIG_SECCOMP
 	/*
 	 * We must handle setting up seccomp filters once we're under
@@ -395,8 +399,6 @@ static struct task_struct *dup_task_struct(struct task_struct *orig, int node)
 	tsk->wake_q.next = NULL;
 
 	account_kernel_stack(stack, 1);
-
-	kcov_task_init(tsk);
 
 	return tsk;
 
@@ -706,25 +708,18 @@ void __mmdrop(struct mm_struct *mm)
 }
 EXPORT_SYMBOL_GPL(__mmdrop);
 
-static inline void __mmput(struct mm_struct *mm)
+#ifdef CONFIG_PREEMPT_RT_BASE
+/*
+ * RCU callback for delayed mm drop. Not strictly rcu, but we don't
+ * want another facility to make this work.
+ */
+void __mmdrop_delayed(struct rcu_head *rhp)
 {
-	VM_BUG_ON(atomic_read(&mm->mm_users));
+	struct mm_struct *mm = container_of(rhp, struct mm_struct, delayed_drop);
 
-	uprobe_clear_state(mm);
-	exit_aio(mm);
-	ksm_exit(mm);
-	khugepaged_exit(mm); /* must run before exit_mmap */
-	exit_mmap(mm);
-	set_mm_exe_file(mm, NULL);
-	if (!list_empty(&mm->mmlist)) {
-		spin_lock(&mmlist_lock);
-		list_del(&mm->mmlist);
-		spin_unlock(&mmlist_lock);
-	}
-	if (mm->binfmt)
-		module_put(mm->binfmt->module);
-	mmdrop(mm);
+	__mmdrop(mm);
 }
+#endif
 
 /*
  * Decrement the use count and release all resources for an mm.
@@ -733,24 +728,24 @@ void mmput(struct mm_struct *mm)
 {
 	might_sleep();
 
-	if (atomic_dec_and_test(&mm->mm_users))
-		__mmput(mm);
-}
-EXPORT_SYMBOL_GPL(mmput);
-
-static void mmput_async_fn(struct work_struct *work)
-{
-	struct mm_struct *mm = container_of(work, struct mm_struct, async_put_work);
-	__mmput(mm);
-}
-
-void mmput_async(struct mm_struct *mm)
-{
 	if (atomic_dec_and_test(&mm->mm_users)) {
-		INIT_WORK(&mm->async_put_work, mmput_async_fn);
-		schedule_work(&mm->async_put_work);
+		uprobe_clear_state(mm);
+		exit_aio(mm);
+		ksm_exit(mm);
+		khugepaged_exit(mm); /* must run before exit_mmap */
+		exit_mmap(mm);
+		set_mm_exe_file(mm, NULL);
+		if (!list_empty(&mm->mmlist)) {
+			spin_lock(&mmlist_lock);
+			list_del(&mm->mmlist);
+			spin_unlock(&mmlist_lock);
+		}
+		if (mm->binfmt)
+			module_put(mm->binfmt->module);
+		mmdrop(mm);
 	}
 }
+EXPORT_SYMBOL_GPL(mmput);
 
 /**
  * set_mm_exe_file - change a reference to the mm's executable file
@@ -1276,6 +1271,9 @@ static void rt_mutex_init_task(struct task_struct *p)
  */
 static void posix_cpu_timers_init(struct task_struct *tsk)
 {
+#ifdef CONFIG_PREEMPT_RT_BASE
+	tsk->posix_timer_list = NULL;
+#endif
 	tsk->cputime_expires.prof_exp = 0;
 	tsk->cputime_expires.virt_exp = 0;
 	tsk->cputime_expires.sched_exp = 0;
@@ -1362,8 +1360,6 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 	if (!p)
 		goto fork_out;
 
-	cpufreq_task_times_init(p);
-
 	ftrace_graph_init_task(p);
 
 	rt_mutex_init_task(p);
@@ -1404,15 +1400,16 @@ static struct task_struct *copy_process(unsigned long clone_flags,
 	spin_lock_init(&p->alloc_lock);
 
 	init_sigpending(&p->pending);
+	p->sigqueue_cache = NULL;
 
 	p->utime = p->stime = p->gtime = 0;
 	p->utimescaled = p->stimescaled = 0;
 	prev_cputime_init(&p->prev_cputime);
 
 #ifdef CONFIG_VIRT_CPU_ACCOUNTING_GEN
-	seqlock_init(&p->vtime_seqlock);
+	seqcount_init(&p->vtime_seqcount);
 	p->vtime_snap = 0;
-	p->vtime_snap_whence = VTIME_SLEEPING;
+	p->vtime_snap_whence = VTIME_INACTIVE;
 #endif
 
 #if defined(SPLIT_RSS_COUNTING)
@@ -1794,8 +1791,6 @@ long _do_fork(unsigned long clone_flags,
 	if (!IS_ERR(p)) {
 		struct completion vfork;
 		struct pid *pid;
-
-		cpufreq_task_times_alloc(p);
 
 		trace_sched_process_fork(current, p);
 

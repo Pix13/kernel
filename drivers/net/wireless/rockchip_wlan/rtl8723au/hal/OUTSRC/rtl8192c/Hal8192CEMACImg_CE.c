@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*Created on  2011/ 6/16,  6: 8*/
 
 #include "../odm_precomp.h"

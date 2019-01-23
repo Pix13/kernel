@@ -53,7 +53,7 @@
 
 	cpuinfo {
 		compatible = "rockchip,cpuinfo";
-		nvmem-cells = <&cpu_id>;
+		nvmem-cells = <&efuse_id>;
 		nvmem-cell-names = "id";
 	};
 
@@ -76,7 +76,7 @@
 		rockchip,serial-id = <2>;
 		rockchip,wake-irq = <0>;
 		rockchip,irq-mode-enable = <0>;  /* If enable uart uses irq instead of fiq */
-		rockchip,baudrate = <1500000>;  /* Only 115200 and 1500000 */
+		rockchip,baudrate = <115200>;  /* Only 115200 and 1500000 */
 		pinctrl-names = "default";
 		pinctrl-0 = <&uart2c_xfer>;
 		interrupts = <GIC_SPI 150 IRQ_TYPE_LEVEL_HIGH 0>;
@@ -92,10 +92,9 @@
 			reg = <0x0 0x0 0x0 0x0>;
 		};
 
-		secure_memory: secure-memory@20000000 {
+		secure_memory: secure-memory@00000000 {
 			compatible = "rockchip,secure-memory";
-			reg = <0x0 0x20000000 0x0 0x10000000>;
-			status = "disabled";
+			reg = <0x0 0x0 0x0 0x0>;
 		};
 
 		stb_devinfo: stb-devinfo@00000000 {
@@ -187,9 +186,9 @@
 			"isp_mipi_fl_prefl", "isp_flash_as_gpio",
 			"isp_flash_as_trigger_out";
 		pinctrl-0 = <&cif_clkout>;
-		pinctrl-1 = <&cif_clkout &isp_dvp_d0d7>;
+		pinctrl-1 = <&isp_dvp_d0d7>;
 		pinctrl-2 = <&cif_clkout>;
-		pinctrl-3 = <&cif_clkout &isp_prelight>;
+		pinctrl-3 = <&isp_prelight>;
 		pinctrl-4 = <&isp_flash_trigger_as_gpio>;
 		pinctrl-5 = <&isp_flash_trigger>;
 		rockchip,isp,mipiphy = <2>;
@@ -258,33 +257,6 @@
 		rockchip,cpu = <&i2s2>;
 		rockchip,codec = <&hdmi>, <&cdn_dp>;
 	};
-
-	firmware {
-		android {
-			compatible = "android,firmware";
-			fstab {
-				compatible = "android,fstab";
-				system {
-					compatible = "android,system";
-					dev = "/dev/block/by-name/system";
-					type = "ext4";
-					mnt_flags = "ro,barrier=1,inode_readahead_blks=8";
-					fsmgr_flags = "wait,verify";
-				};
-				vendor {
-					compatible = "android,vendor";
-					dev = "/dev/block/by-name/vendor";
-					type = "ext4";
-					mnt_flags = "ro,barrier=1,inode_readahead_blks=8";
-					fsmgr_flags = "wait,verify";
-				};
-			};
-		};
-	};
-};
-
-&uart2 {
-	status = "disabled";
 };
 
 &vopb {
@@ -316,14 +288,14 @@
 	status = "okay";
 
 	ports = <&vopb_out>, <&vopl_out>;
-	logo-memory-region = <&drm_logo>;
+	memory-region = <&drm_logo>;
 	secure-memory-region = <&secure_memory>;
 	route {
 		route_hdmi: route-hdmi {
 			status = "disabled";
 			logo,uboot = "logo.bmp";
 			logo,kernel = "logo_kernel.bmp";
-			logo,mode = "center";
+			logo,mode = "fullscreen";
 			charge_logo,mode = "center";
 			connect = <&vopb_out_hdmi>;
 		};
@@ -332,7 +304,7 @@
 			status = "disabled";
 			logo,uboot = "logo.bmp";
 			logo,kernel = "logo_kernel.bmp";
-			logo,mode = "center";
+			logo,mode = "fullscreen";
 			charge_logo,mode = "center";
 			connect = <&vopb_out_dsi>;
 		};
@@ -341,7 +313,7 @@
 			status = "disabled";
 			logo,uboot = "logo.bmp";
 			logo,kernel = "logo_kernel.bmp";
-			logo,mode = "center";
+			logo,mode = "fullscreen";
 			charge_logo,mode = "center";
 			connect = <&vopl_out_dsi1>;
 		};
@@ -350,7 +322,7 @@
 			status = "disabled";
 			logo,uboot = "logo.bmp";
 			logo,kernel = "logo_kernel.bmp";
-			logo,mode = "center";
+			logo,mode = "fullscreen";
 			charge_logo,mode = "center";
 			connect = <&vopb_out_edp>;
 		};
